@@ -38,12 +38,13 @@ def parse_args():
 
     # LLM parameters
     parser.add_argument('--llm-model', type=str, default='gemma3',
+                        choices=['gemma3', 'llama3.1', 'llama3.1', 'deepseek-coder', 'qwen2.5', 'gpt-oss', 'mixtral'],
                         help='Model ID to use for the LLM API.')
 
     # Sampling parameters
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for sampling.')
-    parser.add_argument('--sampling-method', type=str, default='random',
+    parser.add_argument('--sampling-method', type=str, default='neighborhood',
                         choices=['random', 'neighborhood'],
                         help='Method for subgraph sampling.')
     parser.add_argument('--subgraph-size', type=int, default=50,
@@ -140,16 +141,15 @@ if __name__ == '__main__':
                 total += 1
 
                 if args.debug:
-                    print(f"\nQuestion: {question}")
-                    print(f"Answer: {answer}")
-                    print(f"Predicted: {pred}")
-                    print(f"Correct: {pred}")
-                    print(f"=========")
-
+                    pbar.write(f"\nQuestion: {question}")
+                    pbar.write(f"Answer: {answer}")
+                    pbar.write(f"Predicted: {pred}")
+                    pbar.write(f"Correct: {pred.strip().lower() == answer.strip().lower()}")
+                    pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
             pbar.set_description(f"Processing Batches (Accuracy: {accuracy}/{total} = {accuracy/total:.4f})")
 
             if args.debug:
-                print(f"\nBatch {i0//args.batch_size + 1} completed.")
+                pbar.write(f"\nBatch {i0//args.batch_size + 1} completed.")
 
     print(f"\nFinal Accuracy: {accuracy}/{total} = {accuracy/total:.4f}")
