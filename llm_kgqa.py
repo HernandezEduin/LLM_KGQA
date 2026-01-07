@@ -45,10 +45,12 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for sampling.')
     parser.add_argument('--sampling-method', type=str, default='neighborhood',
-                        choices=['random', 'neighborhood'],
+                        choices=['random', 'neighborhood', 'evidence'],
                         help='Method for subgraph sampling.')
     parser.add_argument('--subgraph-size', type=int, default=50,
                         help='Number of triplets in the extracted subgraph.')
+    parser.add_argument('-e','--evidence-only', action='store_true',
+                        help='Whether to use evidence paths instead of the subgraph sampling.')
     parser.add_argument('--max-depth', type=int, default=2,
                         help='Maximum depth for neighborhood expansion (only for neighborhood sampling).')
     
@@ -59,6 +61,12 @@ def parse_args():
 
 if __name__ == '__main__':
     args = parse_args()
+
+    if args.use_evidence_only:
+        print("Using evidence paths only; overriding subgraph sampling parameters.")
+        args.subgraph_size = None
+        args.sampling_method = 'evidence'
+        args.batch_size = 1  # process one QA at a time when using evidence paths
 
     # Define file paths
     data_dir = os.path.join(args.data_dir, args.dataset)
@@ -128,6 +136,8 @@ if __name__ == '__main__':
                     target_size=args.subgraph_size,
                     rng_seed=args.seed + i0
                 )
+            elif args.sampling_method == 'evidence':
+                sub_graph = path_triplets
             else:
                 raise ValueError(f"Unknown sampling method: {args.sampling_method}")
 
@@ -144,12 +154,13 @@ if __name__ == '__main__':
                     pbar.write(f"\nQuestion: {question}")
                     pbar.write(f"Answer: {answer}")
                     pbar.write(f"Predicted: {pred}")
+                    pbar.write(f"Subgraph size: {len(sub_graph)} triplets")
                     pbar.write(f"Correct: {pred.strip().lower() == answer.strip().lower()}")
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
             pbar.set_description(f"Processing Batches (Accuracy: {accuracy}/{total} = {accuracy/total:.4f})")
 
-            if args.debug:
-                pbar.write(f"\nBatch {i0//args.batch_size + 1} completed.")
+            # if args.debug:
+            #     pbar.write(f"\nBatch {i0//args.batch_size + 1} completed.")
 
     print(f"\nFinal Accuracy: {accuracy}/{total} = {accuracy/total:.4f}")

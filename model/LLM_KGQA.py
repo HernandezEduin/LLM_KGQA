@@ -58,14 +58,15 @@ class LLM_KGQA_Client:
             str: The formatted prompt string.
         """
         triplets_str = translate_path(triplets, entity_title, relation_title)
+        # print(triplets_str)
         template = (
             "You will be given a natural-language question and a set of knowledge-graph triplets.\n"
             "Answer the question using ONLY the information supported by the provided triplets.\n"
             "If the answer is not entailed by the triplets, reply exactly: UNKNOWN.\n\n"
+            "Return only the final answer (no explanation, no extra text).\n"
             f"Question: {question}\n\n"
             "Triplets (head, relation, tail):\n"
             f"{triplets_str}\n\n"
-            "Return only the final answer (no explanation, no extra text)."
         )
         return template
 
