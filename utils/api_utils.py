@@ -112,7 +112,7 @@ def extract_model_ids(models_resp: dict) -> list[str]:
         model_ids = [m.get("id") for m in models_resp if isinstance(m, dict)]
     return [m for m in model_ids if m]
 
-def pick_model(model_ids: list[str]) -> str:
+def pick_model(model_ids: list[str], choice: str = 'gemma3') -> str:
     """
     Select a model ID based on predefined preferences.
 
@@ -124,12 +124,12 @@ def pick_model(model_ids: list[str]) -> str:
     """
     # Prefer any model whose id is exactly "gemma3" or ends with "/gemma3"
     for m in model_ids:
-        if m == "gemma3" or m.endswith("/gemma3"):
+        if m == choice or m.endswith(f"/{choice}"):
             return m
 
     # Also accept common Ollama tags like gemma3:latest, gemma3:12b, etc.
     for m in model_ids:
-        if m.startswith("gemma3:"):
+        if m.startswith(f"{choice}:"):
             return m
 
     # Fallback: first available
