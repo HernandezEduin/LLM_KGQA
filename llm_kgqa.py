@@ -38,7 +38,7 @@ def parse_args():
 
     # LLM parameters
     parser.add_argument('--llm-model', type=str, default='gemma3',
-                        choices=['gemma3', 'llama3.1', 'llama3.1', 'deepseek-coder', 'qwen2.5', 'gpt-oss', 'mixtral'],
+                        choices=['gemma3', 'llama3', 'llama3.1', 'deepseek-coder', 'qwen2.5', 'gpt-oss', 'mixtral'],
                         help='Model ID to use for the LLM API.')
 
     # Sampling parameters
@@ -51,7 +51,7 @@ def parse_args():
                         help='Number of triplets in the extracted subgraph.')
     parser.add_argument('-e','--evidence-only', action='store_true',
                         help='Whether to use evidence paths instead of the subgraph sampling.')
-    parser.add_argument('--max-depth', type=int, default=2,
+    parser.add_argument('--max-depth', type=int, default=3,
                         help='Maximum depth for neighborhood expansion (only for neighborhood sampling).')
     
     parser.add_argument('-d', '--debug', action='store_true',
