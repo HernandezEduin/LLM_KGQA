@@ -3,4 +3,5 @@
 */.ipynb_checkpoints/*
 /configs/openwebui_config.json
 /data/*
+/results/*
 /wandb/*
