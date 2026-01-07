@@ -62,7 +62,7 @@ def parse_args():
 if __name__ == '__main__':
     args = parse_args()
 
-    if args.use_evidence_only:
+    if args.evidence_only:
         print("Using evidence paths only; overriding subgraph sampling parameters.")
         args.subgraph_size = None
         args.sampling_method = 'evidence'
@@ -110,11 +110,14 @@ if __name__ == '__main__':
     # TODO: Record LLM Model vs Hop Size (2-4, n) vs Sampling Method vs Subgraph Size (10, 50, 100, 500, 1000, onwards) results
     accuracy = 0
     total = 0
+    total_qa = len(qa_df)
+    total_batches = (total_qa + args.batch_size - 1) // args.batch_size # ceiling division
+
     # Process QA batches with tqdm showing current accuracy
-    with tqdm(range(0, len(qa_df), args.batch_size), desc="Processing Batches") as pbar:
+    with tqdm(range(0, total_batches), desc="Processing Batches") as pbar:
         for i0 in pbar:
-            qa_batch = qa_df[i0:i0+args.batch_size]
-            qa_path_batch = df_paths[i0:i0+args.batch_size]
+            qa_batch = qa_df[i0*args.batch_size:(i0+1)*args.batch_size]         # return the last smaller batch as is, even if size < batch_size
+            qa_path_batch = df_paths[i0*args.batch_size:(i0+1)*args.batch_size]
             path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode())
 
             # Perform subgraph sampling
