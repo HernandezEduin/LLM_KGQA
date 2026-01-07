@@ -106,10 +106,26 @@ if __name__ == '__main__':
         debug=args.debug
     )
 
-    # TODO: Ensure all the QA are evalutated (total == len(qa_df) at the end)
     # TODO: Record LLM Model vs Hop Size (2-4, n) vs Sampling Method vs Subgraph Size (10, 50, 100, 500, 1000, onwards) results
-    accuracy = 0
-    total = 0
+    statistics = {}
+
+    overall_stats = {
+        'accuracy': 0,
+        'running_count': 0,
+        'total': len(qa_df),
+        'subgraph_sizes': defaultdict(int),
+    }
+    statistics['overall'] = overall_stats
+
+    if args.hops == 'n':
+        hop_size_counts = qa_df['Hops'].value_counts().to_dict()
+        for hop_size, count in hop_size_counts.items():
+            statistics[f'{hop_size}'] = {
+                'accuracy': 0,
+                'total': count,
+                'running_count': 0
+            }
+
     total_qa = len(qa_df)
     total_batches = (total_qa + args.batch_size - 1) // args.batch_size # ceiling division
 
@@ -148,10 +164,17 @@ if __name__ == '__main__':
                 question = qa_batch['Question'].iloc[i1]
                 answer = qa_batch['Answer'].iloc[i1]
                 path = qa_path_batch.iloc[i1]
+                hop = qa_batch['Hops'].iloc[i1]
 
                 pred = client.process_question(question, sub_graph, entity_title, relation_title)
-                accuracy += int(pred.strip().lower() == answer.strip().lower())
-                total += 1
+                result = pred.strip().lower() == answer.strip().lower()
+                statistics['overall']['accuracy'] += int(result)
+                statistics['overall']['running_count'] += 1
+                statistics['overall']['subgraph_sizes'][len(sub_graph)] += 1
+
+                if args.hops == 'n':
+                    statistics[f'{hop}']['accuracy'] += int(result)
+                    statistics[f'{hop}']['running_count'] += 1
 
                 if args.debug:
                     pbar.write(f"\nQuestion: {question}")
@@ -161,9 +184,24 @@ if __name__ == '__main__':
                     pbar.write(f"Correct: {pred.strip().lower() == answer.strip().lower()}")
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
-            pbar.set_description(f"Processing Batches (Accuracy: {accuracy}/{total} = {accuracy/total:.4f})")
+            pbar.set_description(f"Processing Batches (Accuracy: {statistics['overall']['accuracy']}/{statistics['overall']['running_count']} = {statistics['overall']['accuracy']/statistics['overall']['running_count']:.4f})")
 
             # if args.debug:
             #     pbar.write(f"\nBatch {i0//args.batch_size + 1} completed.")
 
-    print(f"\nFinal Accuracy: {accuracy}/{total} = {accuracy/total:.4f}")
+    acc = statistics['overall']['accuracy']
+    total = statistics['overall']['total']
+    print(f"\nFinal Accuracy: {acc}/{total} = {acc/total:.4f}")
+    if args.hops == 'n':
+        for hop_size in sorted(statistics.keys()):
+            if hop_size == 'overall':
+                continue
+            acc = statistics[hop_size]['accuracy']
+            total = statistics[hop_size]['total']
+            print(f"Hop Size {hop_size} Accuracy: {acc}/{total} = {acc/total:.4f}")
+
+    # save the results as a JSON file
+    results_file = os.path.join('./results', f'results_{args.dataset}_{args.hops}hop_{args.llm_model}_subgraph{args.subgraph_size}_{args.sampling_method}_seed{args.seed}.json')
+    with open(results_file, 'w', encoding='utf-8') as f:
+        json.dump(statistics, f, indent=4)
+        print(f"Results saved to {results_file}")
