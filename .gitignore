@@ -1,0 +1,6 @@
+*.pyc
+.webui_secret_key
+*/.ipynb_checkpoints/*
+/configs/openwebui_config.json
+/data/*
+/wandb/*
