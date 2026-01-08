@@ -2,6 +2,7 @@ import argparse
 import os
 from pathlib import Path
 
+import re
 import json
 import pandas as pd
 
@@ -59,6 +60,17 @@ def parse_args():
     
     return parser.parse_args()
 
+def extract_final_answer(output: str):
+    # Remove leading phrases like "Answer:", "The answer is", etc.
+    cleaned = re.sub(r'(?i)(^.*?(answer is|final answer|output|response)[:,\s]*)', '', output)
+    # Take the first line or token until punctuation
+    cleaned = cleaned.strip().split("\n")[0].split(".")[0]
+    # Optional: remove quotes, trailing punctuation
+    cleaned = cleaned.strip(' "\'.')
+    # remove parentheses
+    cleaned = re.sub(r'[\(\)]', '', cleaned)
+    return cleaned
+
 if __name__ == '__main__':
     args = parse_args()
 
@@ -68,6 +80,8 @@ if __name__ == '__main__':
         args.sampling_method = 'evidence'
         args.batch_size = 1  # process one QA at a time when using evidence paths
 
+    # TODO: Calculate if batch size is smaller than subgraph size for random sampling (must be smaller or equal)
+    
     # Define file paths
     data_dir = os.path.join(args.data_dir, args.dataset)
     qa_file = os.path.join(data_dir, f'qa_{args.hops}hop.csv')
@@ -162,12 +176,20 @@ if __name__ == '__main__':
 
             for i1 in range(len(qa_batch)):
                 question = qa_batch['Question'].iloc[i1]
-                answer = qa_batch['Answer'].iloc[i1]
+                answer = extract_final_answer(qa_batch['Answer'].iloc[i1])
                 path = qa_path_batch.iloc[i1]
                 hop = qa_batch['Hops'].iloc[i1]
 
-                pred = client.process_question(question, sub_graph, entity_title, relation_title)
-                result = pred.strip().lower() == answer.strip().lower()
+                pred = client.process_question(
+                    question, 
+                    sub_graph, 
+                    entity_title, 
+                    relation_title, 
+                    args.seed + i0, 
+                    sort_triplets=not args.evidence_only
+                )
+                pred = extract_final_answer(pred)
+                result = pred.lower() == answer.lower()
                 statistics['overall']['accuracy'] += int(result)
                 statistics['overall']['running_count'] += 1
                 statistics['overall']['subgraph_sizes'][len(sub_graph)] += 1
@@ -181,7 +203,7 @@ if __name__ == '__main__':
                     pbar.write(f"Answer: {answer}")
                     pbar.write(f"Predicted: {pred}")
                     pbar.write(f"Subgraph size: {len(sub_graph)} triplets")
-                    pbar.write(f"Correct: {pred.strip().lower() == answer.strip().lower()}")
+                    pbar.write(f"Correct: {pred.lower() == answer.lower()}")
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
             pbar.set_description(f"Processing Batches (Accuracy: {statistics['overall']['accuracy']}/{statistics['overall']['running_count']} = {statistics['overall']['accuracy']/statistics['overall']['running_count']:.4f})")

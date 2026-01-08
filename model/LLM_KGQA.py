@@ -1,4 +1,5 @@
 from pathlib import Path
+import random
 
 from utils.path_utils import translate_path
 from utils.api_utils import list_models, chat, extract_model_ids, pick_model, load_api_config
@@ -58,12 +59,12 @@ class LLM_KGQA_Client:
             str: The formatted prompt string.
         """
         triplets_str = translate_path(triplets, entity_title, relation_title)
-        # print(triplets_str)
+        triplets_str = "{\n" + "\n".join([f"\t({h}, {r}, {t})" for h, r, t in triplets_str]) + "\n}"
         template = (
             "You will be given a natural-language question and a set of knowledge-graph triplets.\n"
             "Answer the question using ONLY the information supported by the provided triplets.\n"
             "If the answer is not entailed by the triplets, reply exactly: UNKNOWN.\n\n"
-            "Return only the final answer (no explanation, no extra text).\n"
+            "Return only the final answer (no explanation, no reasoning, no extra text).\n"
             f"Question: {question}\n\n"
             "Triplets (head, relation, tail):\n"
             f"{triplets_str}\n\n"
@@ -99,7 +100,15 @@ class LLM_KGQA_Client:
         """
         return chat(base_url=self.base_url, headers=self.headers, model=self.model_choice, user_text=user_text)
 
-    def process_question(self, question: str, sub_graph: set, entity_title: dict, relation_title: dict) -> str:
+    def process_question(
+        self, 
+        question: str, 
+        sub_graph: set, 
+        entity_title: dict,
+        relation_title: dict, 
+        random_seed: int = 42, 
+        sort_graph: bool = True
+    ) -> str:
         """
         Process a single question by preparing the prompt, sending it to the API, and extracting the prediction.
 
@@ -108,10 +117,16 @@ class LLM_KGQA_Client:
             sub_graph (set): The subgraph of triplets to use for the question.
             entity_title (dict): Mapping of entity IDs to titles.
             relation_title (dict): Mapping of relation IDs to titles.
+            random_seed (int): Seed for random operations to ensure reproducibility.
+            sort_graph (bool): Whether to randomly shuffle the subgraph triplets.
 
         Returns:
             str: The predicted answer from the LLM.
         """
-        template = self.prepare_prompt(question, list(sub_graph), entity_title, relation_title)
+        # randomly shuffle the subgraph triplets to avoid any ordering bias
+        sub_graph = list(sub_graph)
+        if sort_graph:
+            random.Random(random_seed).shuffle(sub_graph)
+        template = self.prepare_prompt(question, sub_graph, entity_title, relation_title)
         out = self.chat(user_text=template)
         return out["choices"][0]["message"]["content"]
