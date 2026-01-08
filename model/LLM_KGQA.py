@@ -1,7 +1,7 @@
 from pathlib import Path
 import random
 
-from utils.path_utils import translate_path
+from utils.kgqa_utils import translate_path
 from utils.api_utils import list_models, chat, extract_model_ids, pick_model, load_api_config
 
 from typing import List, Tuple

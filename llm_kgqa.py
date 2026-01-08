@@ -11,7 +11,7 @@ from tqdm import tqdm
 from model.LLM_KGQA import LLM_KGQA_Client
 
 from utils.basic import load_triplets, extract_literals
-from utils.path_utils import translate_path
+from utils.kgqa_utils import extract_final_answer
 from utils.graph_utils import (
     random_subgraph_sampling,
     neighborhood_subgraph_sampling,
@@ -59,17 +59,6 @@ def parse_args():
                         help='Enable debug mode with verbose output.')
     
     return parser.parse_args()
-
-def extract_final_answer(output: str):
-    # Remove leading phrases like "Answer:", "The answer is", etc.
-    cleaned = re.sub(r'(?i)(^.*?(answer is|final answer|output|response)[:,\s]*)', '', output)
-    # Take the first line or token until punctuation
-    cleaned = cleaned.strip().split("\n")[0].split(".")[0]
-    # Optional: remove quotes, trailing punctuation
-    cleaned = cleaned.strip(' "\'.')
-    # remove parentheses
-    cleaned = re.sub(r'[\(\)]', '', cleaned)
-    return cleaned
 
 if __name__ == '__main__':
     args = parse_args()
