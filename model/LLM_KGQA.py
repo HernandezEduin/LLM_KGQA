@@ -129,4 +129,8 @@ class LLM_KGQA_Client:
             random.Random(random_seed).shuffle(sub_graph)
         template = self.prepare_prompt(question, sub_graph, entity_title, relation_title)
         out = self.chat(user_text=template)
+        if out is None:
+            return "UNKNOWN"
+        if type(out) != dict or "choices" not in out or len(out["choices"]) == 0:
+            return "UNKNOWN"
         return out["choices"][0]["message"]["content"]
