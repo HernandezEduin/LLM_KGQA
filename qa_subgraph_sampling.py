@@ -4,7 +4,7 @@ import json
 import pandas as pd
 
 from utils.basic import load_triplets, extract_literals
-from utils.path_utils import translate_path
+from utils.kgqa_utils import translate_path
 from utils.graph_utils import (
     random_subgraph_sampling,
     neighborhood_subgraph_sampling,

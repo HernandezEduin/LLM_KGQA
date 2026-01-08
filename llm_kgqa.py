@@ -175,7 +175,7 @@ if __name__ == '__main__':
                     entity_title, 
                     relation_title, 
                     args.seed + i0, 
-                    sort_triplets=not args.evidence_only
+                    sort_graph=not args.evidence_only
                 )
                 pred = extract_final_answer(pred)
                 result = pred.lower() == answer.lower()
