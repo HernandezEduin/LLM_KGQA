@@ -18,7 +18,6 @@ from utils.graph_utils import (
     build_incidence_index,
 )
 
-from typing import List, Tuple
 from collections import defaultdict
 
 def parse_args():
@@ -115,7 +114,6 @@ if __name__ == '__main__':
         debug=args.debug
     )
 
-    # TODO: Record LLM Model vs Hop Size (2-4, n) vs Sampling Method vs Subgraph Size (10, 50, 100, 500, 1000, onwards) results
     statistics = {}
 
     overall_stats = {
