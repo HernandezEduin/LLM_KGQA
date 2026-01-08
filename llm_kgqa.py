@@ -2,11 +2,11 @@ import argparse
 import os
 from pathlib import Path
 
-import re
 import json
 import pandas as pd
 
 from tqdm import tqdm
+import warnings
 
 from model.LLM_KGQA import LLM_KGQA_Client
 
@@ -64,13 +64,19 @@ if __name__ == '__main__':
     args = parse_args()
 
     if args.evidence_only:
-        print("Using evidence paths only; overriding subgraph sampling parameters.")
         args.subgraph_size = None
         args.sampling_method = 'evidence'
-        args.batch_size = 1  # process one QA at a time when using evidence paths
+        args.batch_size = 1
+        warnings.warn("Using evidence paths only; overriding subgraph sampling parameters.")
 
-    # TODO: Calculate if batch size is smaller than subgraph size for random sampling (must be smaller or equal)
-    
+    # Calculate minimum subgraph size based on batch size and hops
+    if args.sampling_method != 'evidence' and args.subgraph_size is not None:
+        max_hops = int(args.hops) if args.hops != 'n' else (4 if args.dataset == 'mquake' else 3)
+        graph_min_size = args.batch_size * max_hops
+        if args.subgraph_size < graph_min_size:
+            args.batch_size = graph_min_size//max_hops
+            warnings.warn(f"Subgraph size ({args.subgraph_size}) is smaller than batch_size * hops ({graph_min_size}). Reducing batch_size to {args.batch_size}.")
+
     # Define file paths
     data_dir = os.path.join(args.data_dir, args.dataset)
     qa_file = os.path.join(data_dir, f'qa_{args.hops}hop.csv')
