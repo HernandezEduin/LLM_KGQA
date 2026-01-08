@@ -1,14 +1,16 @@
-def translate_path(triplet_path: list, entity_title: dict, relation_title: dict) -> list:
+from typing import List, Tuple
+
+def translate_path(triplet_path: List[Tuple[str, str, str]], entity_title: dict, relation_title: dict) -> List[Tuple[str, str, str]]:
     """
     Translate triplet paths into human-readable format using entity and relation titles.
 
     Args:
-        triplet_path (list): List of triplets (head, relation, tail).
+        triplet_path (List[Tuple[str, str, str]]): List of triplets (head, relation, tail).
         entity_title (dict): Mapping of entity IDs to titles.
         relation_title (dict): Mapping of relation IDs to titles.
 
     Returns:
-        list: Human-readable triplet paths.
+        List[Tuple[str, str, str]]: Human-readable triplet paths.
     """
     readable_path = []
     for head, relation, tail in triplet_path:
