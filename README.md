@@ -51,6 +51,7 @@ Contributions are welcome! Please fork the repository and submit a pull request.
 This project is licensed under the Academic License.
 
 ## TODO:
+- [x] Set Seed for LLM via backend.
 - [ ] Add an option for bulk/batch chat functionality.
 - [ ] Enhance chat timeout and retry mechanisms to handle longer subgraphs effectively.
 - [ ] Add a functionality that converts the triplets of the subgraph into a sentence instead.

@@ -68,7 +68,14 @@ def list_models(base_url: str, headers: dict) -> dict:
     r.raise_for_status()
     return r.json()
 
-def chat(base_url: str, headers: dict, model: str, user_text: str, timeout: int = 120) -> dict:
+def chat(
+    base_url: str, 
+    headers: dict, 
+    model: str, 
+    user_text: str, 
+    seed: int | None = None,
+    timeout: int = 120
+) -> dict:
     """
     Send a chat message to the API and get the response.
 
@@ -77,6 +84,7 @@ def chat(base_url: str, headers: dict, model: str, user_text: str, timeout: int 
         headers (dict): HTTP headers for the request.
         model (str): The model ID to use for the chat.
         user_text (str): The user's input text.
+        seed (int | None): Optional random seed for the request.
         timeout (int): Timeout in seconds for the API request.
 
     Returns:
@@ -89,6 +97,10 @@ def chat(base_url: str, headers: dict, model: str, user_text: str, timeout: int 
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
     }
+
+    if seed is not None:
+        payload["seed"] = int(seed)
+
     r = requests.post(f"{base_url}/api/chat/completions", headers=headers, json=payload, timeout=timeout)
     if r.status_code != 200:
         print("Status:", r.status_code)

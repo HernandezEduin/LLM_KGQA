@@ -113,6 +113,7 @@ if __name__ == '__main__':
     client = LLM_KGQA_Client(
         CONFIG_PATH,
         model_choice=args.llm_model,
+        seed=args.seed,
         timeout=args.timeout,
         debug=args.debug
     )

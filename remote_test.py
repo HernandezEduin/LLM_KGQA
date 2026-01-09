@@ -24,7 +24,7 @@ class RemoteTestClient:
         """
         return list_models(base_url=self.base_url, headers=self.headers)
 
-    def chat(self, model: str, user_text: str):
+    def chat(self, model: str, user_text: str, seed: int | None = None):
         """
         Send a chat message to the API and get the response.
 
@@ -35,7 +35,7 @@ class RemoteTestClient:
         Returns:
             dict: JSON response from the API.
         """
-        return chat(base_url=self.base_url, headers=self.headers, model=model, user_text=user_text)
+        return chat(base_url=self.base_url, headers=self.headers, model=model, user_text=user_text, seed=seed)
 
 if __name__ == "__main__":
     CONFIG_PATH = Path(__file__).with_name("openwebui_config.json").parent / "configs" / "openwebui_config.json"
