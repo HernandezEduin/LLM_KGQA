@@ -6,6 +6,18 @@ from utils.api_utils import list_models, chat, extract_model_ids, pick_model, lo
 
 from typing import List, Tuple
 
+valid_models = [
+    'gemma3', 
+    'llama3', 
+    'llama3.1', 
+    'deepseek-coder', 
+    'qwen2.5', 
+    'gpt-oss', 
+    'mixtral', 
+    'vicuna', 
+    'phi3'
+]
+
 class LLM_KGQA_Client:
     def __init__(self, config_path: Path, model_choice: str = 'gemma3', debug: bool = False):
         """
@@ -45,7 +57,7 @@ class LLM_KGQA_Client:
         if self.debug:
             print("\nUsing model:", self.model_choice)
 
-    def prepare_prompt(self, question: str, triplets: List[Tuple[str, str, str]], entity_title: dict, relation_title: dict) -> str:
+    def prepare_prompt(self, question: str, triplets: List[Tuple[str, str, str]], entity_title: dict, relation_title: dict) -> Tuple[str, str]:
         """
         Prepare the prompt for the LLM based on the question and triplets.
 
@@ -64,12 +76,14 @@ class LLM_KGQA_Client:
             "You will be given a natural-language question and a set of knowledge-graph triplets.\n"
             "Answer the question using ONLY the information supported by the provided triplets.\n"
             "If the answer is not entailed by the triplets, reply exactly: UNKNOWN.\n\n"
+            "Each question contains a unique answer.\n"
             "Return only the final answer (no explanation, no reasoning, no extra text).\n"
-            f"Question: {question}\n\n"
+            "Double-check the spelling of your answer.\n\n"
+            f"Question: {question}\n"
             "Triplets (head, relation, tail):\n"
             f"{triplets_str}\n\n"
         )
-        return template
+        return template, triplets_str
 
     def _fetch_models(self):
         """
@@ -127,10 +141,10 @@ class LLM_KGQA_Client:
         sub_graph = list(sub_graph)
         if sort_graph:
             random.Random(random_seed).shuffle(sub_graph)
-        template = self.prepare_prompt(question, sub_graph, entity_title, relation_title)
+        template, triplets_str = self.prepare_prompt(question, sub_graph, entity_title, relation_title)
         out = self.chat(user_text=template)
         if out is None:
-            return "UNKNOWN"
+            return "UNKNOWN", triplets_str
         if type(out) != dict or "choices" not in out or len(out["choices"]) == 0:
-            return "UNKNOWN"
-        return out["choices"][0]["message"]["content"]
+            return "UNKNOWN", triplets_str
+        return out["choices"][0]["message"]["content"], triplets_str

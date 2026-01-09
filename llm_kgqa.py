@@ -8,7 +8,7 @@ import pandas as pd
 from tqdm import tqdm
 import warnings
 
-from model.LLM_KGQA import LLM_KGQA_Client
+from model.LLM_KGQA import LLM_KGQA_Client, valid_models
 
 from utils.basic import load_triplets, extract_literals
 from utils.kgqa_utils import extract_final_answer
@@ -38,7 +38,7 @@ def parse_args():
 
     # LLM parameters
     parser.add_argument('--llm-model', type=str, default='gemma3',
-                        choices=['gemma3', 'llama3', 'llama3.1', 'deepseek-coder', 'qwen2.5', 'gpt-oss', 'mixtral'],
+                        choices=valid_models,
                         help='Model ID to use for the LLM API.')
 
     # Sampling parameters
@@ -173,7 +173,7 @@ if __name__ == '__main__':
                 path = qa_path_batch.iloc[i1]
                 hop = qa_batch['Hops'].iloc[i1]
 
-                pred = client.process_question(
+                pred, sub_graph_txt = client.process_question(
                     question, 
                     sub_graph, 
                     entity_title, 
@@ -181,6 +181,8 @@ if __name__ == '__main__':
                     args.seed + i0, 
                     sort_graph=not args.evidence_only
                 )
+                # create a copy of the full prediction before extracting final answer
+                full_pred = pred
                 pred = extract_final_answer(pred)
                 result = pred.lower() == answer.lower()
                 statistics['overall']['accuracy'] += int(result)
@@ -191,10 +193,12 @@ if __name__ == '__main__':
                     statistics[f'{hop}']['accuracy'] += int(result)
                     statistics[f'{hop}']['running_count'] += 1
 
-                if args.debug:
+                if args.debug and not result:
                     pbar.write(f"\nQuestion: {question}")
                     pbar.write(f"Answer: {answer}")
                     pbar.write(f"Predicted: {pred}")
+                    pbar.write(f"Full Prediction: {full_pred}")
+                    pbar.write(f"Subgraph Text: {sub_graph_txt}")
                     pbar.write(f"Subgraph size: {len(sub_graph)} triplets")
                     pbar.write(f"Correct: {pred.lower() == answer.lower()}")
                     pbar.write(f"=========")
@@ -206,14 +210,14 @@ if __name__ == '__main__':
 
     acc = statistics['overall']['accuracy']
     total = statistics['overall']['total']
-    print(f"\nFinal Accuracy: {acc}/{total} = {acc/total:.4f}")
+    print(f"\nFinal Accuracy: {acc}/{total} = {100*acc/total:.2f}%")
     if args.hops == 'n':
         for hop_size in sorted(statistics.keys()):
             if hop_size == 'overall':
                 continue
             acc = statistics[hop_size]['accuracy']
             total = statistics[hop_size]['total']
-            print(f"Hop Size {hop_size} Accuracy: {acc}/{total} = {acc/total:.4f}")
+            print(f"Hop Size {hop_size} Accuracy: {acc}/{total} = {100*acc/total:.2f}%")
 
     # save the results as a JSON file
     results_file = os.path.join('./results', f'results_{args.dataset}_{args.hops}hop_{args.llm_model}_subgraph{args.subgraph_size}_{args.sampling_method}_seed{args.seed}.json')
