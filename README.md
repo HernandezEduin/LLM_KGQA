@@ -1,0 +1,56 @@
+# LLMs Project
+
+## Overview
+This project focuses on leveraging Large Language Models (LLMs) for Knowledge Graph Question Answering (KGQA). It includes scripts and utilities for preprocessing data, running experiments, and analyzing results across different datasets and LLM models.
+
+## Project Structure
+
+- **configs/**: Contains configuration files for the project.
+- **data/**: Placeholder folder for KGQA datasets.
+- **model/**: Contains the main implementation of the LLM KGQA model.
+- **results/**: Stores the results of experiments in JSON format.
+- **utils/**: Utility scripts for API interactions, graph processing, and more.
+- **scripts**: Bash scripts for running specific experiments and sanity checks.
+
+## Key Files
+
+- `llm_kgqa.py`: Main script for running KGQA experiments.
+- `preprocess.py`: Script for preprocessing datasets.
+
+## Installation
+
+This project requires Python 3.12 or higher. Ensure you have the correct version installed before proceeding.
+
+1. Clone the repository:
+   ```bash
+   git clone <repository-url>
+   cd LLMs
+   ```
+
+2. Install dependencies:
+   ```bash
+   pip install -r requirements.txt
+   ```
+
+## Usage
+
+### Running Experiments
+
+To run an experiment, use the `llm_kgqa.py` script. For example:
+```bash
+python ./llm_kgqa.py --dataset kinship --hops n --llm-model gpt-oss -e
+```
+
+## Results
+Results are stored in the `results/` directory. Each result file is named based on the dataset, model, and experiment parameters.
+
+## Contributing
+Contributions are welcome! Please fork the repository and submit a pull request.
+
+## License
+This project is licensed under the Academic License.
+
+## TODO:
+- [ ] Add an option for bulk/batch chat functionality.
+- [ ] Enhance chat timeout and retry mechanisms to handle longer subgraphs effectively.
+- [ ] Add a functionality that converts the triplets of the subgraph into a sentence instead.
