@@ -19,7 +19,14 @@ valid_models = [
 ]
 
 class LLM_KGQA_Client:
-    def __init__(self, config_path: Path, model_choice: str = 'gemma3', seed: int | None = None, timeout: int = 120, debug: bool = False):
+    def __init__(
+        self, 
+        config_path: Path, 
+        model_choice: str = 'gemma3', 
+        seed: int | None = None, 
+        timeout: int = 120, 
+        debug: bool = False
+    ):
         """
         Initialize the LLM_KGQA_Client with configuration.
 
@@ -61,7 +68,13 @@ class LLM_KGQA_Client:
         if self.debug:
             print("\nUsing model:", self.model_choice)
 
-    def prepare_prompt(self, question: str, triplets: List[Tuple[str, str, str]], entity_title: dict, relation_title: dict) -> Tuple[str, str]:
+    def prepare_prompt(
+            self, 
+            question: str, 
+            triplets: List[Tuple[str, str, str]], 
+            entity_title: dict,
+            relation_title: dict
+        ) -> Tuple[str, str]:
         """
         Prepare the prompt for the LLM based on the question and triplets.
 
@@ -116,7 +129,14 @@ class LLM_KGQA_Client:
         Returns:
             dict: JSON response from the API.
         """
-        return chat(base_url=self.base_url, headers=self.headers, model=self.model_choice, user_text=user_text, seed=self.seed, timeout=self.timeout)
+        return chat(
+            base_url=self.base_url, 
+            headers=self.headers, 
+            model=self.model_choice, 
+            user_text=user_text, 
+            seed=self.seed, 
+            timeout=self.timeout
+        )
 
     def process_question(
         self, 
