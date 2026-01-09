@@ -19,15 +19,17 @@ valid_models = [
 ]
 
 class LLM_KGQA_Client:
-    def __init__(self, config_path: Path, model_choice: str = 'gemma3', debug: bool = False):
+    def __init__(self, config_path: Path, model_choice: str = 'gemma3', timeout: int = 120, debug: bool = False):
         """
         Initialize the LLM_KGQA_Client with configuration.
 
         Args:
             config_path (Path): Path to the configuration file.
             model_choice (str): Default model to use for the LLM API.
+            timeout (int): Timeout in seconds for LLM API requests.
             debug (bool): Enable debug mode for verbose output.
         """
+        self.timeout = timeout
         self.debug = debug
         self.base_url, self.api_key = load_api_config(config_path)
         self.headers = {
@@ -112,7 +114,7 @@ class LLM_KGQA_Client:
         Returns:
             dict: JSON response from the API.
         """
-        return chat(base_url=self.base_url, headers=self.headers, model=self.model_choice, user_text=user_text)
+        return chat(base_url=self.base_url, headers=self.headers, model=self.model_choice, user_text=user_text, timeout=self.timeout)
 
     def process_question(
         self, 

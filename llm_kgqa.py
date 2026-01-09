@@ -40,6 +40,8 @@ def parse_args():
     parser.add_argument('--llm-model', type=str, default='gemma3',
                         choices=valid_models,
                         help='Model ID to use for the LLM API.')
+    parser.add_argument('--timeout', type=int, default=120,
+                        help='Timeout in seconds for LLM API requests.')
 
     # Sampling parameters
     parser.add_argument('--seed', type=int, default=42,
@@ -111,6 +113,7 @@ if __name__ == '__main__':
     client = LLM_KGQA_Client(
         CONFIG_PATH,
         model_choice=args.llm_model,
+        timeout=args.timeout,
         debug=args.debug
     )
 
