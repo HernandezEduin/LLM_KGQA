@@ -1,3 +1,8 @@
+"""
+This script is designed for running Knowledge Graph Question Answering (KGQA) experiments using generic Large Language Models (LLMs).
+It supports subgraph sampling, evidence-based reasoning, and batch processing of questions.
+"""
+
 import argparse
 import os
 from pathlib import Path
@@ -22,7 +27,11 @@ from collections import defaultdict
 
 def parse_args():
     """
-    Parse command-line arguments for the script.
+    The `parse_args` function defines and parses command-line arguments for the script. These arguments include:
+    - Dataset and data directory paths
+    - Subgraph sampling methods and parameters
+    - LLM model selection and timeout settings
+    - Debugging options
     """
     parser = argparse.ArgumentParser(description="Subgraph Sampling for QA Dataset")
     
@@ -60,6 +69,16 @@ def parse_args():
                         help='Enable debug mode with verbose output.')
     
     return parser.parse_args()
+
+# Main Execution
+"""
+The main block of the script handles the following:
+1. Argument validation and adjustments based on user input.
+2. Loading datasets, triplets, and entity/relation mappings.
+3. Initializing the LLM client for processing questions.
+4. Iteratively processing batches of questions, performing subgraph sampling, and evaluating predictions.
+5. Saving the results to a JSON file.
+"""
 
 if __name__ == '__main__':
     args = parse_args()
@@ -147,7 +166,13 @@ if __name__ == '__main__':
             qa_path_batch = df_paths[i0*args.batch_size:(i0+1)*args.batch_size]
             path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode())
 
-            # Perform subgraph sampling
+            # Subgraph Sampling
+            """
+            Three subgraph sampling methods:
+            - Neighborhood Sampling: Expands the graph around specific entities up to a defined depth (includes evidence paths).
+            - Random Sampling: Selects random triplets from the graph (includes evidence paths).
+            - Evidence-Based Sampling: Uses predefined evidence paths.
+            """
             if args.sampling_method == 'neighborhood':
                 sub_graph = neighborhood_subgraph_sampling(
                     full_graph=all_triplets,
@@ -198,6 +223,13 @@ if __name__ == '__main__':
                     statistics[f'{hop}']['running_count'] += 1
 
                 if args.debug and not result:
+                    """
+                    When the `--debug` flag is enabled, the script provides detailed output for each question, including:
+                    - The question and its correct answer
+                    - The predicted answer and full prediction details
+                    - The subgraph text and size
+                    - Whether the prediction was correct
+                    """
                     pbar.write(f"\nQuestion: {question}")
                     pbar.write(f"Answer: {answer}")
                     pbar.write(f"Predicted: {pred}")
@@ -208,10 +240,12 @@ if __name__ == '__main__':
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
             pbar.set_description(f"Processing Batches (Accuracy: {statistics['overall']['accuracy']}/{statistics['overall']['running_count']} = {statistics['overall']['accuracy']/statistics['overall']['running_count']:.4f})")
-
-            # if args.debug:
-            #     pbar.write(f"\nBatch {i0//args.batch_size + 1} completed.")
-
+    
+    # Results
+    """
+    Calculate and display accuracy metrics for the overall dataset and individual hop sizes (if applicable).
+    Results are saved in the `results/` directory with a descriptive filename.
+    """
     acc = statistics['overall']['accuracy']
     total = statistics['overall']['total']
     print(f"\nFinal Accuracy: {acc}/{total} = {100*acc/total:.2f}%")
