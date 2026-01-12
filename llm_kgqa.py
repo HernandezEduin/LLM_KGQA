@@ -24,6 +24,7 @@ from utils.graph_utils import (
 )
 
 from collections import defaultdict
+from typing import Dict
 
 def parse_args():
     """
@@ -83,6 +84,67 @@ The main block of the script handles the following:
 4. Iteratively processing batches of questions, performing subgraph sampling, and evaluating predictions.
 5. Saving the results to a JSON file.
 """
+def initialize_statistics(total: int) -> Dict:
+    return {
+        'accuracy': 0,
+        'running_count': 0,
+        'total': total,
+        'subgraph_sizes': defaultdict(int),
+        'prompt_tokens': [],
+        'response_tokens': [],
+        'total_tokens': [],
+        'response_seconds': [],
+        'prompt_seconds': [],
+        'total_seconds': [],
+        'prompt_tps': [],
+        'completion_tps': [],
+        'unknown': 0,
+        'timeouts': 0,
+        'errors': 0,
+    }
+
+def update_stats(
+    stats_dict: Dict, 
+    status_info: Dict, 
+    result: str, 
+    full_pred: str, 
+    sub_graph_size: int,
+) -> None:
+    stats_dict['accuracy'] += int(result)
+    stats_dict['running_count'] += 1
+    stats_dict['subgraph_sizes'][sub_graph_size] += 1
+    
+    stats_dict['prompt_tokens'].append(status_info['prompt_tokens'])
+    stats_dict['response_tokens'].append(status_info['response_tokens'])
+    stats_dict['total_tokens'].append(status_info['total_tokens'])
+
+    stats_dict['response_seconds'].append(status_info['response_seconds'])
+    stats_dict['prompt_seconds'].append(status_info['prompt_seconds'])
+    stats_dict['total_seconds'].append(status_info['total_seconds'])
+
+    stats_dict['prompt_tps'].append(status_info['prompt_tps'])
+    stats_dict['completion_tps'].append(status_info['completion_tps'])
+
+    stats_dict['unknown'] += int(full_pred == "UNKNOWN")
+    stats_dict['timeouts'] += int(full_pred == "TIMEOUT")
+    stats_dict['errors'] += int(full_pred == "ERROR")
+
+def average(lst):
+    return sum(lst) / len(lst) if lst else 0
+
+def avg_dict(vals: Dict[str, object]) -> Dict[str, float]:
+    """
+    Averages the values in a dictionary. If a value is a list, it computes the average of the list.
+    """
+    out = {}
+    for k, v in vals.items():
+        if isinstance(v, list): # if the value is a list, average its elements
+            out[k] = average(v)
+        else:                   # otherwise, keep the value as is
+            out[k] = v
+    return out
+    # check if dict contains lists, if it does, average them
+
 
 if __name__ == '__main__':
     args = parse_args()
@@ -142,31 +204,12 @@ if __name__ == '__main__':
     )
 
     statistics = {}
-
-    overall_stats = {
-        'accuracy': 0,
-        'running_count': 0,
-        'total': len(qa_df),
-        'subgraph_sizes': defaultdict(int),
-        'response_times': [],
-        'unknown': 0,
-        'timeouts': 0,
-        'errors': 0,
-    }
-    statistics['overall'] = overall_stats
+    statistics['overall'] = initialize_statistics(total=len(qa_df))
 
     if args.hops == 'n':
         hop_size_counts = qa_df['Hops'].value_counts().to_dict()
         for hop_size, count in hop_size_counts.items():
-            statistics[f'{hop_size}'] = {
-                'accuracy': 0,
-                'total': count,
-                'running_count': 0,
-                'response_times': [],
-                'unknown': 0,
-                'timeouts': 0,
-                'errors': 0,
-            }
+            statistics[f'{hop_size}'] = initialize_statistics(total=count)
 
     total_qa = len(qa_df)
     total_batches = (total_qa + args.batch_size - 1) // args.batch_size # ceiling division
@@ -214,7 +257,7 @@ if __name__ == '__main__':
                 path = qa_path_batch.iloc[i1]
                 hop = qa_batch['Hops'].iloc[i1]
 
-                pred, sub_graph_txt, elapsed_time = client.process_question(
+                pred, sub_graph_txt, status_info = client.process_question(
                     question, 
                     sub_graph, 
                     entity_title, 
@@ -226,21 +269,23 @@ if __name__ == '__main__':
                 full_pred = pred
                 pred = extract_final_answer(pred)
                 result = pred.lower() == answer.lower()
-                statistics['overall']['accuracy'] += int(result)
-                statistics['overall']['running_count'] += 1
-                statistics['overall']['subgraph_sizes'][len(sub_graph)] += 1
-                statistics['overall']['response_times'].append(elapsed_time)
-                statistics['overall']['unknown'] += int(full_pred == "UNKNOWN")
-                statistics['overall']['timeouts'] += int(full_pred == "TIMEOUT")
-                statistics['overall']['errors'] += int(full_pred == "ERROR")
+
+                update_stats(
+                    statistics['overall'], 
+                    status_info, 
+                    result, 
+                    full_pred, 
+                    len(sub_graph)
+                )
 
                 if args.hops == 'n':
-                    statistics[f'{hop}']['accuracy'] += int(result)
-                    statistics[f'{hop}']['running_count'] += 1
-                    statistics[f'{hop}']['response_times'].append(elapsed_time)
-                    statistics[f'{hop}']['unknown'] += int(full_pred == "UNKNOWN")
-                    statistics[f'{hop}']['timeouts'] += int(full_pred == "TIMEOUT")
-                    statistics[f'{hop}']['errors'] += int(full_pred == "ERROR")
+                    update_stats(
+                        statistics[f'{hop}'], 
+                        status_info, 
+                        result, 
+                        full_pred, 
+                        len(sub_graph)
+                    )
 
                 if args.debug and not result:
                     """
@@ -266,19 +311,20 @@ if __name__ == '__main__':
     Calculate and display accuracy metrics for the overall dataset and individual hop sizes (if applicable).
     Results are saved in the `results/` directory with a descriptive filename.
     """
+    statistics['overall'] = avg_dict(statistics['overall'])
     acc = statistics['overall']['accuracy']
     total = statistics['overall']['running_count']
-    statistics['overall']['response_times'] = sum(statistics['overall']['response_times']) / len(statistics['overall']['response_times']) if statistics['overall']['response_times'] else 0
-    statistics['overall']['avg_accuracy'] = acc / total if total > 0 else 0
-    print(f"\nFinal Accuracy: {acc}/{total} = {100*acc/total:.2f}%")
+    statistics['overall']['avg_accuracy'] = 100*acc / total if total > 0 else 0
+    print(f"\nFinal Accuracy: {acc}/{total} = {statistics['overall']['avg_accuracy']:.2f}%")
     if args.hops == 'n':
         for hop_size in sorted(statistics.keys()):
             if hop_size == 'overall':
                 continue
+            statistics[hop_size] = avg_dict(statistics[hop_size])
             acc = statistics[hop_size]['accuracy']
             total = statistics[hop_size]['running_count']
-            statistics[hop_size]['response_times'] = sum(statistics[hop_size]['response_times']) / len(statistics[hop_size]['response_times']) if statistics[hop_size]['response_times'] else 0
-            print(f"Hop Size {hop_size} Accuracy: {acc}/{total} = {100*acc/total:.2f}%")
+            statistics[hop_size]['avg_accuracy'] = 100*acc / total if total > 0 else 0
+            print(f"Hop Size {hop_size} Accuracy: {acc}/{total} = {statistics[hop_size]['avg_accuracy']:.2f}%")
 
     # save the results as a JSON file
     result_path = os.path.join(args.result_dir, args.dataset)

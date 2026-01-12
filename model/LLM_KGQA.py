@@ -18,6 +18,13 @@ valid_models = [
     'phi3'
 ]
 
+# Durations: often in nanoseconds for Ollama-style stats
+def ns_to_s(x):
+    try:
+        return float(x) / 1e9
+    except Exception:
+        return None
+
 class LLM_KGQA_Client:
     def __init__(
         self, 
@@ -167,16 +174,69 @@ class LLM_KGQA_Client:
             random.Random(random_seed).shuffle(sub_graph)
         template, triplets_str = self.prepare_prompt(question, sub_graph, entity_title, relation_title)
         out, status_info = self.chat(user_text=template)
+        status_info.update( self.normalize_usage(out.get("usage", {})))
+
         if self.debug and status_info["status"] != "success":
             print(f"LLM response status: {status_info['status']}, message: {status_info.get('message', '')}")
 
         if status_info["status"] == "timeout":
-            return "TIMEOUT", triplets_str, status_info['elapsed_time']
+            return "TIMEOUT", triplets_str, status_info
         elif status_info["status"] != "success":
-            return "ERROR", triplets_str, status_info['elapsed_time']
-        
+            return "ERROR", triplets_str, status_info
+
         if out is None:
-            return "UNKNOWN", triplets_str, status_info['elapsed_time']
+            return "UNKNOWN", triplets_str, status_info
+
         if type(out) != dict or "choices" not in out or len(out["choices"]) == 0:
-            return "UNKNOWN", triplets_str, status_info['elapsed_time']
-        return out["choices"][0]["message"]["content"], triplets_str, status_info['elapsed_time']
+            return "UNKNOWN", triplets_str, status_info
+        return out["choices"][0]["message"]["content"], triplets_str, status_info
+
+    def normalize_usage(self, raw: dict) -> dict:
+        """
+        Normalize token usage returned by different backends (OpenAI-style, Ollama/OpenWebUI-style, etc.)
+        into a stable schema.
+
+        Returns keys:
+        - prompt_tokens
+        - completion_tokens
+        - total_tokens
+        - prompt_tps (optional)
+        - completion_tps (optional)
+        - total_seconds (optional)
+        - prompt_seconds (optional)
+        - completion_seconds (optional)
+        """
+        if not isinstance(raw, dict):
+            return {}
+
+        # Prefer explicit fields if present
+        prompt_tokens = raw.get("prompt_tokens", raw.get("prompt_eval_count"))
+        completion_tokens = raw.get("completion_tokens", raw.get("eval_count"))
+        total_tokens = raw.get("total_tokens")
+
+        # Fill total if missing
+        if total_tokens is None and prompt_tokens is not None and completion_tokens is not None:
+            total_tokens = int(prompt_tokens) + int(completion_tokens)
+
+        out = {}
+        if prompt_tokens is not None:
+            out["prompt_tokens"] = int(prompt_tokens)
+        if completion_tokens is not None:
+            out["response_tokens"] = int(completion_tokens)
+        if total_tokens is not None:
+            out["total_tokens"] = int(total_tokens)
+
+        # Throughput
+        if "prompt_token/s" in raw:
+            out["prompt_tps"] = float(raw["prompt_token/s"])
+        if "response_token/s" in raw:
+            out["completion_tps"] = float(raw["response_token/s"])
+
+        if "total_duration" in raw:
+            out["total_seconds"] = ns_to_s(raw["total_duration"])
+        if "prompt_eval_duration" in raw:
+            out["prompt_seconds"] = ns_to_s(raw["prompt_eval_duration"])
+        if "eval_duration" in raw:
+            out["response_seconds"] = ns_to_s(raw["eval_duration"])
+
+        return out
