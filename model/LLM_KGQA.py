@@ -10,7 +10,7 @@ valid_models = [
     'gemma3', 
     'llama3', 
     'llama3.1', 
-    'deepseek-coder', 
+    'deepseek-r1', 
     'qwen2.5', 
     'gpt-oss', 
     'mixtral', 
@@ -65,8 +65,8 @@ class LLM_KGQA_Client:
             model_name (str): Name of the model to switch to.
         """
         self.model_choice = pick_model(self.model_ids, choice=model_name)
-        if self.debug:
-            print("\nUsing model:", self.model_choice)
+        # if self.debug:
+        print("\nUsing model:", self.model_choice)
 
     def prepare_prompt(
             self, 
@@ -92,7 +92,7 @@ class LLM_KGQA_Client:
         template = (
             "You will be given a natural-language question and a set of knowledge-graph triplets.\n"
             "Answer the question using ONLY the information supported by the provided triplets.\n"
-            "If the answer is not entailed by the triplets, reply exactly: UNKNOWN.\n\n"
+            # "If the answer is not entailed by the triplets, reply exactly: UNKNOWN.\n\n"
             "Each question contains a unique answer.\n"
             "Return only the final answer (no explanation, no reasoning, no extra text).\n"
             "Double-check the spelling of your answer.\n\n"
@@ -166,9 +166,17 @@ class LLM_KGQA_Client:
         if sort_graph:
             random.Random(random_seed).shuffle(sub_graph)
         template, triplets_str = self.prepare_prompt(question, sub_graph, entity_title, relation_title)
-        out = self.chat(user_text=template)
+        out, status_info = self.chat(user_text=template)
+        if self.debug and status_info["status"] != "success":
+            print(f"LLM response status: {status_info['status']}, message: {status_info.get('message', '')}")
+
+        if status_info["status"] == "timeout":
+            return "TIMEOUT", triplets_str, status_info['elapsed_time']
+        elif status_info["status"] != "success":
+            return "ERROR", triplets_str, status_info['elapsed_time']
+        
         if out is None:
-            return "UNKNOWN", triplets_str
+            return "UNKNOWN", triplets_str, status_info['elapsed_time']
         if type(out) != dict or "choices" not in out or len(out["choices"]) == 0:
-            return "UNKNOWN", triplets_str
-        return out["choices"][0]["message"]["content"], triplets_str
+            return "UNKNOWN", triplets_str, status_info['elapsed_time']
+        return out["choices"][0]["message"]["content"], triplets_str, status_info['elapsed_time']

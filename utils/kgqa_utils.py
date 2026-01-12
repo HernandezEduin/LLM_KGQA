@@ -33,7 +33,7 @@ def extract_final_answer(output: str) -> str:
     # Remove leading phrases like "Answer:", "The answer is", etc.
     cleaned = re.sub(r'(?i)(^.*?(answer is|final answer|output|response)[:,\s]*)', '', output)
     # Take the first line or token until punctuation
-    cleaned = cleaned.strip().split("\n")[0].split(".")[0]
+    cleaned = cleaned.strip().split("\n")[0] #.split(".")[0] # TODO: verify if "." is a good idea, i.e., "U.S.A."
     # Optional: remove quotes, trailing punctuation
     cleaned = cleaned.strip(' "\'.')
     # remove parentheses

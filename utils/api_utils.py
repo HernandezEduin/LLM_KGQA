@@ -1,7 +1,10 @@
 import requests
+import time
 
 import json
 from pathlib import Path
+
+from typing import List, Tuple, Dict
 
 
 # ---- Config loading ----
@@ -75,7 +78,7 @@ def chat(
     user_text: str, 
     seed: int | None = None,
     timeout: int = 120
-) -> dict:
+) -> Tuple[dict, Dict[str, object]]:
     """
     Send a chat message to the API and get the response.
 
@@ -89,6 +92,7 @@ def chat(
 
     Returns:
         dict: JSON response from the API.
+        dict: Status information including success, timeout, or error and elapsed time.
 
     Raises:
         HTTPError: If the API request fails.
@@ -101,12 +105,26 @@ def chat(
     if seed is not None:
         payload["seed"] = int(seed)
 
-    r = requests.post(f"{base_url}/api/chat/completions", headers=headers, json=payload, timeout=timeout)
-    if r.status_code != 200:
-        print("Status:", r.status_code)
-        print("Body:", r.text)
-    r.raise_for_status()
-    return r.json()
+    start_time = time.time()
+    try:
+        r = requests.post(f"{base_url}/api/chat/completions", headers=headers, json=payload, timeout=timeout)
+        if r.status_code != 200:
+            print("Status:", r.status_code)
+            print("Body:", r.text)
+        r.raise_for_status()
+        elapsed_time = time.time() - start_time
+        return r.json(), {"status": "success", "elapsed_time": elapsed_time, "message": "Request successful"}
+    except requests.exceptions.Timeout:
+        elapsed_time = time.time() - start_time
+        return {}, {"status": "timeout", "elapsed_time": elapsed_time, "message": f"Request timed out after {timeout} seconds"}
+    except requests.exceptions.ConnectionError as e:
+        elapsed_time = time.time() - start_time
+        print("Error: Connection error occurred.", str(e))
+        return {}, {"status": "connection_error", "elapsed_time": elapsed_time, "message": str(e)}
+    except Exception as e:
+        elapsed_time = time.time() - start_time
+        print("Error: An unexpected error occurred.", str(e))
+        return {}, {"status": "error", "elapsed_time": elapsed_time, "message": str(e)}
 
 def extract_model_ids(models_resp: dict) -> list[str]:
     """

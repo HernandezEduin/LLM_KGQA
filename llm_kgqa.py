@@ -144,6 +144,10 @@ if __name__ == '__main__':
         'running_count': 0,
         'total': len(qa_df),
         'subgraph_sizes': defaultdict(int),
+        'response_times': [],
+        'unknown': 0,
+        'timeouts': 0,
+        'errors': 0,
     }
     statistics['overall'] = overall_stats
 
@@ -153,7 +157,11 @@ if __name__ == '__main__':
             statistics[f'{hop_size}'] = {
                 'accuracy': 0,
                 'total': count,
-                'running_count': 0
+                'running_count': 0,
+                'response_times': [],
+                'unknown': 0,
+                'timeouts': 0,
+                'errors': 0,
             }
 
     total_qa = len(qa_df)
@@ -202,7 +210,7 @@ if __name__ == '__main__':
                 path = qa_path_batch.iloc[i1]
                 hop = qa_batch['Hops'].iloc[i1]
 
-                pred, sub_graph_txt = client.process_question(
+                pred, sub_graph_txt, elapsed_time = client.process_question(
                     question, 
                     sub_graph, 
                     entity_title, 
@@ -217,10 +225,18 @@ if __name__ == '__main__':
                 statistics['overall']['accuracy'] += int(result)
                 statistics['overall']['running_count'] += 1
                 statistics['overall']['subgraph_sizes'][len(sub_graph)] += 1
+                statistics['overall']['response_times'].append(elapsed_time)
+                statistics['overall']['unknown'] += int(full_pred == "UNKNOWN")
+                statistics['overall']['timeouts'] += int(full_pred == "TIMEOUT")
+                statistics['overall']['errors'] += int(full_pred == "ERROR")
 
                 if args.hops == 'n':
                     statistics[f'{hop}']['accuracy'] += int(result)
                     statistics[f'{hop}']['running_count'] += 1
+                    statistics[f'{hop}']['response_times'].append(elapsed_time)
+                    statistics[f'{hop}']['unknown'] += int(full_pred == "UNKNOWN")
+                    statistics[f'{hop}']['timeouts'] += int(full_pred == "TIMEOUT")
+                    statistics[f'{hop}']['errors'] += int(full_pred == "ERROR")
 
                 if args.debug and not result:
                     """
@@ -247,14 +263,17 @@ if __name__ == '__main__':
     Results are saved in the `results/` directory with a descriptive filename.
     """
     acc = statistics['overall']['accuracy']
-    total = statistics['overall']['total']
+    total = statistics['overall']['running_count']
+    statistics['overall']['response_times'] = sum(statistics['overall']['response_times']) / len(statistics['overall']['response_times']) if statistics['overall']['response_times'] else 0
+    statistics['overall']['avg_accuracy'] = acc / total if total > 0 else 0
     print(f"\nFinal Accuracy: {acc}/{total} = {100*acc/total:.2f}%")
     if args.hops == 'n':
         for hop_size in sorted(statistics.keys()):
             if hop_size == 'overall':
                 continue
             acc = statistics[hop_size]['accuracy']
-            total = statistics[hop_size]['total']
+            total = statistics[hop_size]['running_count']
+            statistics[hop_size]['response_times'] = sum(statistics[hop_size]['response_times']) / len(statistics[hop_size]['response_times']) if statistics[hop_size]['response_times'] else 0
             print(f"Hop Size {hop_size} Accuracy: {acc}/{total} = {100*acc/total:.2f}%")
 
     # save the results as a JSON file
