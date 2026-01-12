@@ -68,6 +68,10 @@ def parse_args():
     parser.add_argument('-d', '--debug', action='store_true',
                         help='Enable debug mode with verbose output.')
     
+    # Result parameters
+    parser.add_argument('--result-dir', type=str, default='./results',
+                        help='Directory to save the results.')
+
     return parser.parse_args()
 
 # Main Execution
@@ -277,7 +281,9 @@ if __name__ == '__main__':
             print(f"Hop Size {hop_size} Accuracy: {acc}/{total} = {100*acc/total:.2f}%")
 
     # save the results as a JSON file
-    results_file = os.path.join('./results', f'results_{args.dataset}_{args.hops}hop_{args.llm_model}_subgraph{args.subgraph_size}_{args.sampling_method}_seed{args.seed}.json')
+    result_path = os.path.join(args.result_dir, args.dataset)
+    os.makedirs(result_path, exist_ok=True)
+    results_file = os.path.join(result_path, f'results_{args.hops}hop_{args.llm_model}_subgraph{args.subgraph_size}_{args.sampling_method}_seed{args.seed}.json')
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
         print(f"Results saved to {results_file}")
