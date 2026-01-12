@@ -55,3 +55,4 @@ This project is licensed under the Academic License.
 - [ ] Add an option for bulk/batch chat functionality.
 - [ ] Enhance chat timeout and retry mechanisms to handle longer subgraphs effectively.
 - [ ] Add a functionality that converts the triplets of the subgraph into a sentence instead.
+- [ ] Add a feature to calculate the number of tokens in the prompt.
