@@ -53,6 +53,7 @@ This project is licensed under the Academic License.
 ## TODO:
 - [x] Set Seed for LLM via backend.
 - [ ] Add an option for bulk/batch chat functionality.
-- [ ] Enhance chat timeout and retry mechanisms to handle longer subgraphs effectively.
+- [x] Enhance chat timeout and retry mechanisms to handle longer subgraphs effectively.
 - [ ] Add a functionality that converts the triplets of the subgraph into a sentence instead.
-- [ ] Add a feature to calculate the number of tokens in the prompt.
+- [x] Add a feature to calculate the number of tokens in the prompt.
+- [ ] Add a feature to increment the context window of the llm (num_ctx).
