@@ -227,16 +227,16 @@ class LLM_KGQA_Client:
             out["total_tokens"] = int(total_tokens)
 
         # Throughput
-        if "prompt_token/s" in raw:
+        if "prompt_token/s" in raw and raw["prompt_token/s"] is not None:
             out["prompt_tps"] = float(raw["prompt_token/s"])
-        if "response_token/s" in raw:
+        if "response_token/s" in raw and raw["response_token/s"] is not None:
             out["completion_tps"] = float(raw["response_token/s"])
 
-        if "total_duration" in raw:
+        if "total_duration" in raw and raw["total_duration"] is not None:
             out["total_seconds"] = ns_to_s(raw["total_duration"])
-        if "prompt_eval_duration" in raw:
+        if "prompt_eval_duration" in raw and raw["prompt_eval_duration"] is not None:
             out["prompt_seconds"] = ns_to_s(raw["prompt_eval_duration"])
-        if "eval_duration" in raw:
+        if "eval_duration" in raw and raw["eval_duration"] is not None:
             out["response_seconds"] = ns_to_s(raw["eval_duration"])
 
         return out
