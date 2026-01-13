@@ -200,7 +200,7 @@ class LLM_KGQA_Client:
             random.Random(random_seed).shuffle(sub_graph)
         template, triplets_str = self.prepare_prompt(question, sub_graph, entity_title, relation_title)
         out, status_info = self.chat(user_text=template)
-        status_info.update( self.normalize_usage(out.get("usage", {})))
+        status_info.update( self.normalize_usage(out))
 
         if self.debug and status_info["status"] != "success":
             print(f"LLM response status: {status_info['status']}, message: {status_info.get('message', '')}")
@@ -213,9 +213,9 @@ class LLM_KGQA_Client:
         if out is None:
             return "UNKNOWN", triplets_str, status_info
 
-        if type(out) != dict or "choices" not in out or len(out["choices"]) == 0:
+        if type(out) != dict or "message" not in out or "content" not in out["message"]:
             return "UNKNOWN", triplets_str, status_info
-        return out["choices"][0]["message"]["content"], triplets_str, status_info
+        return out["message"]["content"], triplets_str, status_info
 
     def normalize_usage(self, raw: dict) -> dict:
         """

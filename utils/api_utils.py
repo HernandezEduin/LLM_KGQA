@@ -76,6 +76,7 @@ def chat(
     headers: dict, 
     model: str, 
     user_text: str,
+    stream: bool = False,
     context_window: int = 4096,
     seed: int | None = None,
     timeout: int = 120
@@ -88,6 +89,7 @@ def chat(
         headers (dict): HTTP headers for the request.
         model (str): The model ID to use for the chat.
         user_text (str): The user's input text.
+        stream (bool): Whether to use streaming responses.
         context_window (int): Context window size for the model.
         seed (int | None): Optional random seed for the request.
         timeout (int): Timeout in seconds for the API request.
@@ -102,15 +104,16 @@ def chat(
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
+        "stream": stream,
         "options": { "num_ctx": context_window }
     }
 
     if seed is not None:
-        payload["seed"] = int(seed)
+        payload["options"]["seed"] = int(seed)
 
     start_time = time.time()
     try:
-        r = requests.post(f"{base_url}/api/chat/completions", headers=headers, json=payload, timeout=timeout)
+        r = requests.post(f"{base_url}/ollama/api/chat", headers=headers, json=payload, timeout=timeout)
         if r.status_code != 200:
             print("Status:", r.status_code)
             print("Body:", r.text)
