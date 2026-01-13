@@ -75,7 +75,8 @@ def chat(
     base_url: str, 
     headers: dict, 
     model: str, 
-    user_text: str, 
+    user_text: str,
+    context_window: int = 4096,
     seed: int | None = None,
     timeout: int = 120
 ) -> Tuple[dict, Dict[str, object]]:
@@ -87,6 +88,7 @@ def chat(
         headers (dict): HTTP headers for the request.
         model (str): The model ID to use for the chat.
         user_text (str): The user's input text.
+        context_window (int): Context window size for the model.
         seed (int | None): Optional random seed for the request.
         timeout (int): Timeout in seconds for the API request.
 
@@ -100,6 +102,7 @@ def chat(
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
+        "options": { "num_ctx": context_window }
     }
 
     if seed is not None:

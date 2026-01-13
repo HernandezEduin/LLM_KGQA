@@ -18,6 +18,18 @@ valid_models = [
     'phi3'
 ]
 
+context_window_limits = {
+    'gemma3': 131072,
+    'llama3': 8192,
+    'llama3.1': 131072,
+    'deepseek-r1': 131072,
+    'qwen2.5': 32768,
+    'gpt-oss': 131072,
+    'mixtral': 32768,
+    'vicuna': 4096,
+    'phi3': 131072,
+}
+
 # Durations: often in nanoseconds for Ollama-style stats
 def ns_to_s(x):
     try:
@@ -29,7 +41,8 @@ class LLM_KGQA_Client:
     def __init__(
         self, 
         config_path: Path, 
-        model_choice: str = 'gemma3', 
+        model_choice: str = 'gemma3',
+        context_window: int = 4096,
         seed: int | None = None, 
         timeout: int = 120, 
         debug: bool = False
@@ -40,11 +53,22 @@ class LLM_KGQA_Client:
         Args:
             config_path (Path): Path to the configuration file.
             model_choice (str): Default model to use for the LLM API.
+            context_window (int): Context window size for the model.
             seed (int | None): Optional random seed for the requests.
             timeout (int): Timeout in seconds for LLM API requests.
             debug (bool): Enable debug mode for verbose output.
         """
+        if model_choice not in valid_models:
+            raise ValueError(f"Invalid model choice: {model_choice}. Valid options are: {valid_models}")
+        
+        if context_window > context_window_limits.get(model_choice, 4096):
+            raise ValueError(
+                f"Context window {context_window} exceeds limit for model {model_choice} "
+                f"({context_window_limits.get(model_choice)})."
+            )
+        
         self.timeout = timeout
+        self.context_window = context_window
         self.seed = seed
         self.debug = debug
         self.base_url, self.api_key = load_api_config(config_path)
@@ -58,6 +82,7 @@ class LLM_KGQA_Client:
 
         if not self.model_ids:
             raise RuntimeError(f"Couldn't parse model list response: {self.models_resp}")
+        
 
         if self.debug:
             self._log_available_models()
@@ -140,7 +165,8 @@ class LLM_KGQA_Client:
             base_url=self.base_url, 
             headers=self.headers, 
             model=self.model_choice, 
-            user_text=user_text, 
+            user_text=user_text,
+            context_window=self.context_window, 
             seed=self.seed, 
             timeout=self.timeout
         )
