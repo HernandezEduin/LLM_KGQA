@@ -114,16 +114,17 @@ def update_stats(
     stats_dict['running_count'] += 1
     stats_dict['subgraph_sizes'][sub_graph_size] += 1
     
-    stats_dict['prompt_tokens'].append(status_info['prompt_tokens'])
-    stats_dict['response_tokens'].append(status_info['response_tokens'])
-    stats_dict['total_tokens'].append(status_info['total_tokens'])
+    # append if exists
+    if 'prompt_tokens' in status_info: stats_dict['prompt_tokens'].append(status_info['prompt_tokens'])
+    if 'response_tokens' in status_info: stats_dict['response_tokens'].append(status_info['response_tokens'])
+    if 'total_tokens' in status_info: stats_dict['total_tokens'].append(status_info['total_tokens'])
 
-    stats_dict['response_seconds'].append(status_info['response_seconds'])
-    stats_dict['prompt_seconds'].append(status_info['prompt_seconds'])
-    stats_dict['total_seconds'].append(status_info['total_seconds'])
+    if 'response_seconds' in status_info: stats_dict['response_seconds'].append(status_info['response_seconds'])
+    if 'prompt_seconds' in status_info: stats_dict['prompt_seconds'].append(status_info['prompt_seconds'])
+    if 'total_seconds' in status_info: stats_dict['total_seconds'].append(status_info['total_seconds'])
 
-    stats_dict['prompt_tps'].append(status_info['prompt_tps'])
-    stats_dict['completion_tps'].append(status_info['completion_tps'])
+    if 'prompt_tps' in status_info: stats_dict['prompt_tps'].append(status_info['prompt_tps'])
+    if 'completion_tps' in status_info: stats_dict['completion_tps'].append(status_info['completion_tps'])
 
     stats_dict['unknown'] += int(full_pred == "UNKNOWN")
     stats_dict['timeouts'] += int(full_pred == "TIMEOUT")
