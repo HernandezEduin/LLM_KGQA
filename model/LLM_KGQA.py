@@ -19,15 +19,15 @@ valid_models = [
 ]
 
 context_window_limits = {
-    'gemma3': 131072,
-    'llama3': 8192,
-    'llama3.1': 131072,
-    'deepseek-r1': 131072,
-    'qwen2.5': 32768,
-    'gpt-oss': 131072,
-    'mixtral': 32768,
-    'vicuna': 4096,
-    'phi3': 131072,
+    'gemma3': 128*1024,
+    'llama3': 8*1024,
+    'llama3.1': 128*1024,
+    'deepseek-r1': 128*1024,
+    'qwen2.5': 32*1024,
+    'gpt-oss': 128*1024,
+    'mixtral': 32*1024,
+    'vicuna': 4*1024,
+    'phi3': 128*1024,
 }
 
 # Durations: often in nanoseconds for Ollama-style stats
