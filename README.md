@@ -57,4 +57,4 @@ This project is licensed under the Academic License.
 - [x] Enhance chat timeout and retry mechanisms to handle longer subgraphs effectively.
 - [ ] Add a functionality that converts the triplets of the subgraph into a sentence instead.
 - [x] Add a feature to calculate the number of tokens in the prompt.
-- [ ] Add a feature to increment the context window of the llm (num_ctx).
+- [x] Add a feature to increment the context window of the llm (num_ctx).
