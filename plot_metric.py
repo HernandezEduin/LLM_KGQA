@@ -36,9 +36,12 @@ def parse_args():
                         help='Directory to save the plots.')
     
     # plotting parameters
-    parser.add_argument('--metric', type=str, default='avg_accuracy',
-                        choices=['avg_accuracy', 'prompt_tokens', 'response_tokens', 'total_tokens', 'response_seconds', 'prompt_seconds', 'total_seconds', 'unknown', 'timeouts', 'errors'],
+    parser.add_argument('--metric-yaxis', type=str, default='avg_accuracy',
+                        choices=['subgraph_size', 'avg_accuracy', 'prompt_tokens', 'response_tokens', 'total_tokens', 'response_seconds', 'prompt_seconds', 'total_seconds', 'unknown', 'timeouts', 'errors'],
                         help='Metric to plot.')
+    parser.add_argument('--metric-xaxis', type=str, default='subgraph_size',
+                        choices=['subgraph_size', 'avg_accuracy', 'prompt_tokens', 'response_tokens', 'total_tokens', 'response_seconds', 'prompt_seconds', 'total_seconds', 'unknown', 'timeouts', 'errors'],
+                        help='Metric for x-axis.')
 
     return parser.parse_args()
 
@@ -48,9 +51,11 @@ if __name__ == "__main__":
     results = defaultdict(dict)
     result_path = os.path.join(args.result_dir, args.dataset)
     os.makedirs(args.plot_dir, exist_ok=True)
-    
+
+    assert args.metric_xaxis != args.metric_yaxis, "X-axis and Y-axis metrics must be different."
+
     for llm_model in args.llm_models:
-        results[llm_model] = {'size': [], args.metric: []}
+        results[llm_model] = {args.metric_yaxis: [], args.metric_xaxis: []}
         for size in args.subgraph_size:
             sampling_str = args.sampling_method if size is not None else 'evidence'
             results_file = os.path.join(
@@ -60,8 +65,8 @@ if __name__ == "__main__":
             if os.path.exists(results_file):
                 with open(results_file, 'r') as f:
                     data = json.load(f)
-                    results[llm_model][args.metric].append(data["overall"][args.metric])
-                    results[llm_model]["size"].append(size if size is not None else 1)
+                    results[llm_model][args.metric_yaxis].append(data["overall"][args.metric_yaxis] if args.metric_yaxis != 'subgraph_size' else (size if size is not None else 1))
+                    results[llm_model][args.metric_xaxis].append(data["overall"][args.metric_xaxis] if args.metric_xaxis != 'subgraph_size' else (size if size is not None else 1))
             else:
                 print(f"Warning: Result file {results_file} does not exist.")
 
@@ -69,20 +74,20 @@ if __name__ == "__main__":
     # Plotting
     plt.figure(figsize=(10, 6))
     for llm_model, metrics in results.items():
-        if args.metric in metrics and len(metrics['size'])>1:
+        if args.metric_yaxis in metrics and len(metrics[args.metric_xaxis])>1:
             plt.plot(
-                metrics['size'],
-                metrics[args.metric],
+                metrics[args.metric_xaxis],
+                metrics[args.metric_yaxis],
                 marker='o',
                 label=llm_model
             )
 
-    plt.title(f"{args.dataset} - {args.metric.replace('_', ' ').title()} vs Subgraph Size on")
-    plt.xscale('log')
-    plt.yscale('linear' if 'accuracy' in args.metric else 'log')
-    plt.xlabel("Subgraph Size (Number of Triplets)")
-    plt.ylabel(args.metric.replace('_', ' ').title())
+    plt.title(f"{args.dataset} - {args.metric_yaxis.replace('_', ' ').title()} vs {args.metric_xaxis.replace('_', ' ').title()}")
+    plt.xscale('linear' if 'accuracy' in args.metric_xaxis else 'log')
+    plt.yscale('linear' if 'accuracy' in args.metric_yaxis else 'log')
+    plt.xlabel(args.metric_xaxis.replace('_', ' ').title())
+    plt.ylabel(args.metric_yaxis.replace('_', ' ').title())
     plt.legend()
     plt.grid(True)
     plt.tight_layout()
-    plt.savefig(os.path.join(args.plot_dir, f"{args.dataset}_{args.metric}_vs_subgraph_size.png"))
+    plt.savefig(os.path.join(args.plot_dir, f"{args.dataset}_{args.metric_yaxis}_vs_{args.metric_xaxis}.png"))
