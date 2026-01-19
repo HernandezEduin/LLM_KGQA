@@ -44,8 +44,8 @@ def random_subgraph_sampling(full_graph: set, seeds: set, target_size: int, rng_
     if samples_space_remaining <= 0:
         return seeds
 
-    # Exclude seeds from the sampling pool
-    negative_samples = list(full_graph - seeds)
+    # Exclude seeds from the sampling pool. Sorting first for reproducibility.
+    negative_samples = sorted(list(full_graph - seeds))
 
     # Randomly sample the remaining triplets
     negative_sampled_triplets = set(rng.sample(negative_samples, k=samples_space_remaining))
@@ -109,6 +109,8 @@ def neighborhood_subgraph_sampling(
 
         # Shuffle and add triplets to the subgraph
         if candidate_triplets:
+            # sort for reproducibility 
+            candidate_triplets = sorted(candidate_triplets)
             rng.shuffle(candidate_triplets)
             subgraph.update(candidate_triplets[:target_size - len(subgraph)])
 
@@ -118,7 +120,7 @@ def neighborhood_subgraph_sampling(
     # Fill the subgraph randomly if needed
     if fill_random_if_needed and len(subgraph) < target_size:
         remaining = target_size - len(subgraph)
-        pool = list(full_graph - subgraph)
+        pool = sorted(list(full_graph - subgraph)) # sort for reproducibility
         if pool:
             subgraph.update(rng.sample(pool, k=min(remaining, len(pool))))
 
