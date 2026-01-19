@@ -1,34 +1,11 @@
 from pathlib import Path
 import random
 
+from model.constants import valid_models, has_instruct_versions, has_quantized_versions, context_window_limits
 from utils.kgqa_utils import translate_path
 from utils.api_utils import list_models, chat, extract_model_ids, pick_model, load_api_config
 
 from typing import List, Tuple
-
-valid_models = [
-    'gemma3', 
-    'llama3', 
-    'llama3.1', 
-    'deepseek-r1', 
-    'qwen2.5', 
-    'gpt-oss', 
-    'mixtral', 
-    'vicuna', 
-    'phi3'
-]
-
-context_window_limits = {
-    'gemma3': 128*1024,
-    'llama3': 8*1024,
-    'llama3.1': 128*1024,
-    'deepseek-r1': 128*1024,
-    'qwen2.5': 32*1024,
-    'gpt-oss': 128*1024,
-    'mixtral': 32*1024,
-    'vicuna': 4*1024,
-    'phi3': 128*1024,
-}
 
 # Durations: often in nanoseconds for Ollama-style stats
 def ns_to_s(x):
@@ -73,10 +50,11 @@ class LLM_KGQA_Client:
                 f"({context_window_limits.get(model_choice)})."
             )
         
-        if use_instruct:
-            model_choice += ":instruct"
-            if use_instruct and use_quantized:
-                model_choice += f"-q{quantization_bits}"
+        model_name = model_choice
+        if use_instruct and has_instruct_versions.get(model_choice, False):
+            model_name += ":instruct"
+            if use_quantized and has_quantized_versions.get(model_choice, False):
+                model_name += f"-q{quantization_bits}"
 
         self.use_instruct = use_instruct
         self.use_quantized = use_quantized
@@ -101,7 +79,7 @@ class LLM_KGQA_Client:
         if self.debug:
             self._log_available_models()
 
-        self.change_llm(model_choice)
+        self.change_llm(model_name)
 
     def change_llm(self, model_name: str):
         """

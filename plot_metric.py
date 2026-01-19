@@ -4,7 +4,7 @@ import os
 
 from collections import defaultdict
 
-from model.LLM_KGQA import valid_models
+from model.constants import valid_models
 
 import matplotlib.pyplot as plt
 

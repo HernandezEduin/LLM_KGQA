@@ -13,7 +13,8 @@ import pandas as pd
 from tqdm import tqdm
 import warnings
 
-from model.LLM_KGQA import LLM_KGQA_Client, valid_models
+from model.LLM_KGQA import LLM_KGQA_Client
+from model.constants import valid_models
 
 from utils.basic import load_triplets, extract_literals
 from utils.kgqa_utils import extract_final_answer
