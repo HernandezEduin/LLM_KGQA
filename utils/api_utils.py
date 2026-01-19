@@ -143,7 +143,6 @@ def extract_model_ids(models_resp: dict) -> Dict[str, str]:
         dict: Model IDs mapped to their names.
     """
     model_ids: Dict[str, str] = {}
-    # return model id and name as dictionary
 
     if isinstance(models_resp, dict) and isinstance(models_resp.get("data"), list):
         for m in models_resp["data"]:
@@ -161,12 +160,6 @@ def extract_model_ids(models_resp: dict) -> Dict[str, str]:
                     model_ids[name] = mid
     return model_ids
 
-    # if isinstance(models_resp, dict) and isinstance(models_resp.get("data"), list):
-    #     model_ids = [m.get("id") for m in models_resp["data"] if isinstance(m, dict)]
-    # elif isinstance(models_resp, list):
-    #     model_ids = [m.get("id") for m in models_resp if isinstance(m, dict)]
-    # return [m for m in model_ids if m]
-
 def pick_model(model_ids: Dict[str, str], choice: str = 'gemma3') -> str:
     """
     Select a model ID based on predefined preferences.
@@ -177,15 +170,7 @@ def pick_model(model_ids: Dict[str, str], choice: str = 'gemma3') -> str:
     Returns:
         str: Selected model ID.
     """
-    # # Prefer any model whose id is exactly "gemma3" or ends with "/gemma3"
-    # for m in model_ids:
-    #     if m == choice or m.endswith(f"/{choice}"):
-    #         return m
 
-    # # Also accept common Ollama tags like gemma3:latest, gemma3:12b, etc.
-    # for m in model_ids:
-    #     if m.startswith(f"{choice}:"):
-    #         return m
     for m in model_ids:
         if m == choice:
             return model_ids[m]
