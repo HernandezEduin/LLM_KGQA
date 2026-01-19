@@ -132,7 +132,7 @@ def chat(
         print("Error: An unexpected error occurred.", str(e))
         return {}, {"status": "error", "elapsed_time": elapsed_time, "message": str(e)}
 
-def extract_model_ids(models_resp: dict) -> list[str]:
+def extract_model_ids(models_resp: dict) -> Dict[str, str]:
     """
     Extract model IDs from the API response.
 
@@ -140,34 +140,57 @@ def extract_model_ids(models_resp: dict) -> list[str]:
         models_resp (dict): JSON response containing model data.
 
     Returns:
-        list[str]: List of model IDs.
+        dict: Model IDs mapped to their names.
     """
-    model_ids: list[str] = []
-    if isinstance(models_resp, dict) and isinstance(models_resp.get("data"), list):
-        model_ids = [m.get("id") for m in models_resp["data"] if isinstance(m, dict)]
-    elif isinstance(models_resp, list):
-        model_ids = [m.get("id") for m in models_resp if isinstance(m, dict)]
-    return [m for m in model_ids if m]
+    model_ids: Dict[str, str] = {}
+    # return model id and name as dictionary
 
-def pick_model(model_ids: list[str], choice: str = 'gemma3') -> str:
+    if isinstance(models_resp, dict) and isinstance(models_resp.get("data"), list):
+        for m in models_resp["data"]:
+            if isinstance(m, dict):
+                mid = m.get("id")
+                name = m.get("name")
+                if mid:
+                    model_ids[name] = mid
+    elif isinstance(models_resp, list):
+        for m in models_resp:
+            if isinstance(m, dict):
+                mid = m.get("id")
+                name = m.get("name")
+                if mid:
+                    model_ids[name] = mid
+    return model_ids
+
+    # if isinstance(models_resp, dict) and isinstance(models_resp.get("data"), list):
+    #     model_ids = [m.get("id") for m in models_resp["data"] if isinstance(m, dict)]
+    # elif isinstance(models_resp, list):
+    #     model_ids = [m.get("id") for m in models_resp if isinstance(m, dict)]
+    # return [m for m in model_ids if m]
+
+def pick_model(model_ids: Dict[str, str], choice: str = 'gemma3') -> str:
     """
     Select a model ID based on predefined preferences.
 
     Args:
-        model_ids (list[str]): List of available model IDs.
+        model_ids (dict): Dictionary of model IDs mapped to their names.
 
     Returns:
         str: Selected model ID.
     """
-    # Prefer any model whose id is exactly "gemma3" or ends with "/gemma3"
-    for m in model_ids:
-        if m == choice or m.endswith(f"/{choice}"):
-            return m
+    # # Prefer any model whose id is exactly "gemma3" or ends with "/gemma3"
+    # for m in model_ids:
+    #     if m == choice or m.endswith(f"/{choice}"):
+    #         return m
 
-    # Also accept common Ollama tags like gemma3:latest, gemma3:12b, etc.
+    # # Also accept common Ollama tags like gemma3:latest, gemma3:12b, etc.
+    # for m in model_ids:
+    #     if m.startswith(f"{choice}:"):
+    #         return m
     for m in model_ids:
-        if m.startswith(f"{choice}:"):
-            return m
+        if m == choice:
+            return model_ids[m]
+    
+    raise ValueError(f"Model '{choice}' not found in available models.")
 
     # Fallback: first available
-    return model_ids[0]
+    return list(model_ids.values())[0]

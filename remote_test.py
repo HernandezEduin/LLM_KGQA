@@ -43,18 +43,20 @@ if __name__ == "__main__":
     client = RemoteTestClient(CONFIG_PATH)
 
     models_resp = client.list_models()
+    print("Models response JSON:")
+    # print(models_resp)
     model_ids = extract_model_ids(models_resp)
 
     if not model_ids:
         raise RuntimeError(f"Couldn't parse model list response: {models_resp}")
 
     print("Available models:")
-    for i, mid in enumerate(model_ids, start=1):
-        print(f"  {i:>2}. {mid}")
+    for name, mid in model_ids.items():
+        print(f"- {name}: {mid}")
 
-    chosen = pick_model(model_ids)
+    chosen = pick_model(model_ids, choice="gemma3")
     print("\nUsing model:", chosen)
 
     out = client.chat(model=chosen, user_text="Write a short Python function that computes gcd(a,b).")
     print("\nResponse JSON:")
-    print(out["choices"][0]["message"]["content"])
+    print(out[0]["message"]["content"])
