@@ -50,6 +50,12 @@ def parse_args():
     parser.add_argument('--llm-model', type=str, default='gemma3',
                         choices=valid_models,
                         help='Model ID to use for the LLM API.')
+    parser.add_argument('--use-instruct', action='store_true',
+                        help='Whether to use the instruction-tuned version of the model.')
+    parser.add_argument('--use-quantized', action='store_true',
+                        help='Whether to use the quantized version of the model.')
+    parser.add_argument('--quantization-bits', type=int, default=4,
+                        help='Number of bits for quantization (if using quantized model).')
     parser.add_argument('--context-window', type=int, default=4096,
                         help='Context window size for the LLM model.')
     parser.add_argument('--timeout', type=int, default=120,
@@ -201,6 +207,9 @@ if __name__ == '__main__':
     client = LLM_KGQA_Client(
         CONFIG_PATH,
         model_choice=args.llm_model,
+        use_instruct=args.use_instruct,
+        use_quantized=args.use_quantized,
+        quantization_bits=args.quantization_bits,
         context_window=args.context_window,
         seed=args.seed,
         timeout=args.timeout,

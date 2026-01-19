@@ -88,15 +88,15 @@ def neighborhood_subgraph_sampling(
     if target_size <= 0:
         return []
 
+    rng = Random(rng_seed)
     seeds = set(seeds)
     if len(seeds) >= target_size:
         # Sort for deterministic ordering before shuffling
         sorted_seeds = sorted(list(seeds))
-        rng = Random(rng_seed)
+
         rng.shuffle(sorted_seeds)
         return sorted_seeds
 
-    rng = Random(rng_seed)
     subgraph = set(seeds)
 
     # Initialize the frontier with entities from the seeds

@@ -42,6 +42,9 @@ class LLM_KGQA_Client:
         self, 
         config_path: Path, 
         model_choice: str = 'gemma3',
+        use_instruct: bool = False,
+        use_quantized: bool = False,
+        quantization_bits: int = 4,
         context_window: int = 4096,
         seed: int | None = None, 
         timeout: int = 120, 
@@ -53,6 +56,9 @@ class LLM_KGQA_Client:
         Args:
             config_path (Path): Path to the configuration file.
             model_choice (str): Default model to use for the LLM API.
+            use_instruct (bool): Whether to use the instruction-tuned version of the model.
+            use_quantized (bool): Whether to use the quantized version of the model.
+            quantization_bits (int): Number of bits for quantization (if using quantized model).
             context_window (int): Context window size for the model.
             seed (int | None): Optional random seed for the requests.
             timeout (int): Timeout in seconds for LLM API requests.
@@ -67,6 +73,14 @@ class LLM_KGQA_Client:
                 f"({context_window_limits.get(model_choice)})."
             )
         
+        if use_instruct:
+            model_choice += ":instruct"
+            if use_instruct and use_quantized:
+                model_choice += f"-q{quantization_bits}"
+
+        self.use_instruct = use_instruct
+        self.use_quantized = use_quantized
+        self.quantization_bits = quantization_bits
         self.timeout = timeout
         self.context_window = context_window
         self.seed = seed
@@ -97,7 +111,6 @@ class LLM_KGQA_Client:
             model_name (str): Name of the model to switch to.
         """
         self.model_choice = pick_model(self.model_ids, choice=model_name)
-        # if self.debug:
         print("\nUsing model:", self.model_choice)
 
     def prepare_prompt(
