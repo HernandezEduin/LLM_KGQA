@@ -267,13 +267,15 @@ if __name__ == '__main__':
 
             for i1 in range(len(qa_batch)):
                 question = qa_batch['Question'].iloc[i1]
+                start_node = qa_batch['Source-Entity'].iloc[i1]
                 answer = extract_final_answer(qa_batch['Answer'].iloc[i1])
                 path = qa_path_batch.iloc[i1]
                 hop = qa_batch['Hops'].iloc[i1]
 
                 pred, sub_graph_txt, status_info = client.process_question(
-                    question, 
-                    sub_graph, 
+                    question,
+                    start_node, 
+                    sub_graph,
                     entity_title, 
                     relation_title, 
                     args.seed + i0, 

@@ -93,7 +93,8 @@ class LLM_KGQA_Client:
 
     def prepare_prompt(
             self, 
-            question: str, 
+            question: str,
+            start_node: str, 
             triplets: List[Tuple[str, str, str]], 
             entity_title: dict,
             relation_title: dict
@@ -103,6 +104,7 @@ class LLM_KGQA_Client:
 
         Args:
             question (str): The natural-language question.
+            start_node (str): The starting node for the subgraph.
             triplets (List[Tuple[str, str, str]]): Knowledge-graph triplets.
             entity_title (dict): Mapping of entity IDs to titles.
             relation_title (dict): Mapping of relation IDs to titles.
@@ -110,16 +112,18 @@ class LLM_KGQA_Client:
         Returns:
             str: The formatted prompt string.
         """
+        start_node_str = entity_title.get(start_node, start_node)
         triplets_str = translate_path(triplets, entity_title, relation_title)
         triplets_str = "{\n" + "\n".join([f"\t({h}, {r}, {t})" for h, r, t in triplets_str]) + "\n}"
         template = (
-            "You will be given a natural-language question and a set of knowledge-graph triplets.\n"
+            "You will be given a natural-language question, a starting node, and a set of knowledge-graph triplets.\n"
             "Answer the question using ONLY the information supported by the provided triplets.\n"
             # "If the answer is not entailed by the triplets, reply exactly: UNKNOWN.\n\n"
             "Each question contains a unique answer.\n"
             "Return only the final answer (no explanation, no reasoning, no extra text).\n"
             "Double-check the spelling of your answer.\n\n"
             f"Question: {question}\n"
+            f"Starting Node: {start_node_str}\n"
             "Triplets (head, relation, tail):\n"
             f"{triplets_str}\n\n"
         )
@@ -164,7 +168,8 @@ class LLM_KGQA_Client:
 
     def process_question(
         self, 
-        question: str, 
+        question: str,
+        start_node: str,
         sub_graph: set, 
         entity_title: dict,
         relation_title: dict, 
@@ -176,6 +181,7 @@ class LLM_KGQA_Client:
 
         Args:
             question (str): The natural-language question.
+            start_node (str): The starting node for the subgraph.
             sub_graph (set): The subgraph of triplets to use for the question.
             entity_title (dict): Mapping of entity IDs to titles.
             relation_title (dict): Mapping of relation IDs to titles.
@@ -189,7 +195,7 @@ class LLM_KGQA_Client:
         sub_graph = list(sub_graph)
         if sort_graph:
             random.Random(random_seed).shuffle(sub_graph)
-        template, triplets_str = self.prepare_prompt(question, sub_graph, entity_title, relation_title)
+        template, triplets_str = self.prepare_prompt(question, start_node, sub_graph, entity_title, relation_title)
         out, status_info = self.chat(user_text=template)
         status_info.update( self.normalize_usage(out))
 
