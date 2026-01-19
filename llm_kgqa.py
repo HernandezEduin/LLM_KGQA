@@ -343,7 +343,12 @@ if __name__ == '__main__':
     # save the results as a JSON file
     result_path = os.path.join(args.result_dir, args.dataset)
     os.makedirs(result_path, exist_ok=True)
-    results_file = os.path.join(result_path, f'results_{args.hops}hop_{args.llm_model}_subgraph{args.subgraph_size}_{args.sampling_method}_seed{args.seed}.json')
+    model_name = args.llm_model
+    if args.use_instruct:
+        model_name += "-instruct"
+        if args.use_quantized:
+            model_name += f"-q{args.quantization_bits}"
+    results_file = os.path.join(result_path, f'results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{args.sampling_method}_seed{args.seed}.json')
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
         print(f"Results saved to {results_file}")
