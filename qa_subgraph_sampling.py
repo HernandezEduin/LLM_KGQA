@@ -114,5 +114,5 @@ if __name__ == '__main__':
             raise ValueError(f"Unknown sampling method: {args.sampling_method}")
 
         print(f"Subgraph triplets in Batch ({len(sub_graph)}): {sub_graph}\n")
-        print(f"Readable Subgraph triplets in Batch: {translate_path(list(sub_graph), entity_title, relation_title)}\n")
+        print(f"Readable Subgraph triplets in Batch: {translate_path(sub_graph, entity_title, relation_title)}\n")
         break

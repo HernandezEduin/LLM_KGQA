@@ -25,7 +25,7 @@ def build_incidence_index(full_graph: set):
 
     return incidence, neighbors
 
-def random_subgraph_sampling(full_graph: set, seeds: set, target_size: int, rng_seed: int = 42) -> set:
+def random_subgraph_sampling(full_graph: set, seeds: set, target_size: int, rng_seed: int = 42) -> list:
     """
     Perform random subgraph sampling from the full graph.
 
@@ -42,14 +42,22 @@ def random_subgraph_sampling(full_graph: set, seeds: set, target_size: int, rng_
     rng = Random(rng_seed)
 
     if samples_space_remaining <= 0:
-        return seeds
+        # Sort for deterministic ordering before shuffling
+        sorted_seeds = sorted(list(seeds))
+        rng.shuffle(sorted_seeds)
+        return sorted_seeds
 
     # Exclude seeds from the sampling pool. Sorting first for reproducibility.
     negative_samples = sorted(list(full_graph - seeds))
 
     # Randomly sample the remaining triplets
     negative_sampled_triplets = set(rng.sample(negative_samples, k=samples_space_remaining))
-    return seeds.union(negative_sampled_triplets)
+    set_triplets =  seeds.union(negative_sampled_triplets)
+
+    # Convert to list, sort for deterministic initial state, then shuffle
+    shuffled_triplets = sorted(list(set_triplets))
+    rng.shuffle(shuffled_triplets)
+    return shuffled_triplets
 
 def neighborhood_subgraph_sampling(
     full_graph: set,
@@ -60,7 +68,7 @@ def neighborhood_subgraph_sampling(
     max_depth: int = 2,
     rng_seed: int = 0,
     fill_random_if_needed: bool = True,
-):
+) -> list:
     """
     Perform neighborhood-based subgraph sampling.
 
@@ -78,11 +86,15 @@ def neighborhood_subgraph_sampling(
         set: Subgraph containing the sampled triplets.
     """
     if target_size <= 0:
-        return set()
+        return []
 
     seeds = set(seeds)
     if len(seeds) >= target_size:
-        return seeds
+        # Sort for deterministic ordering before shuffling
+        sorted_seeds = sorted(list(seeds))
+        rng = Random(rng_seed)
+        rng.shuffle(sorted_seeds)
+        return sorted_seeds
 
     rng = Random(rng_seed)
     subgraph = set(seeds)
@@ -124,4 +136,7 @@ def neighborhood_subgraph_sampling(
         if pool:
             subgraph.update(rng.sample(pool, k=min(remaining, len(pool))))
 
-    return subgraph
+    # Convert to list, sort for deterministic initial state, then shuffle
+    shuffled_subgraph = sorted(list(subgraph))
+    rng.shuffle(shuffled_subgraph)
+    return shuffled_subgraph
