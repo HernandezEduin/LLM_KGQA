@@ -140,3 +140,92 @@ def neighborhood_subgraph_sampling(
     shuffled_subgraph = sorted(list(subgraph))
     rng.shuffle(shuffled_subgraph)
     return shuffled_subgraph
+
+def neighborhood_subgraph_sampling_by_node(
+    full_graph: set,
+    start_node,
+    incidence,
+    neighbors,
+    target_size: int,
+    max_depth: int = 2,
+    rng_seed: int = 0,
+    fill_random_if_needed: bool = True,
+) -> list:
+    """
+    Perform neighborhood-based subgraph sampling starting from a single node entity.
+
+    Args:
+        full_graph (set): The complete set of triplets in the graph.
+        start_node: Initial node entity to seed the subgraph expansion.
+        incidence (dict): Incidence index mapping entities to triplets.
+        neighbors (dict): Neighbor index mapping entities to neighbors.
+        target_size (int): Desired size of the subgraph.
+        max_depth (int): Maximum depth for neighborhood expansion.
+        rng_seed (int): Random seed for reproducibility.
+        fill_random_if_needed (bool): Whether to fill the subgraph randomly if under target size.
+
+    Returns:
+        list: Subgraph containing the sampled triplets.
+    """
+    
+    if target_size <= 0:
+        return []
+
+    rng = Random(rng_seed)
+    subgraph = set()
+
+    visited_nodes = {start_node}
+    frontier = {start_node}
+
+    # depth = 0 means "start_node layer"
+    for depth in range(max_depth + 1):
+        if len(subgraph) >= target_size or not frontier:
+            break
+
+        candidate_triplets = []
+        next_frontier = set()
+
+        # gather candidate edges from this layer
+        for node in frontier:
+            for tr in incidence.get(node, []):
+                if tr not in subgraph:
+                    candidate_triplets.append(tr)
+
+        # capped randomized; to prevent node domination (one high degree node) ... need k_neighbors
+        # for node in frontier:
+        #     nb_list = [nb for nb in neighbors.get(node, set()) if nb not in visited_nodes]
+        #     nb_list.sort()
+        #     rng.shuffle(nb_list)
+
+        #     for nb in nb_list[:k_neighbors]:
+        #         next_frontier.add(nb)
+
+        # sample edges from candidates
+        if candidate_triplets:
+            candidate_triplets = sorted(candidate_triplets)  # deterministic base
+            rng.shuffle(candidate_triplets)
+            need = target_size - len(subgraph)
+            subgraph.update(candidate_triplets[:need])
+
+        # prepare next layer (unless we've hit max depth)
+        if depth == max_depth:
+            break
+
+        for node in frontier:
+            for nb in neighbors.get(node, set()):
+                if nb not in visited_nodes:
+                    next_frontier.add(nb)
+
+        visited_nodes.update(next_frontier)
+        frontier = next_frontier
+
+    # optional fill from anywhere if not max size
+    if fill_random_if_needed and len(subgraph) < target_size:
+        remaining = target_size - len(subgraph)
+        pool = sorted(list(full_graph - subgraph))
+        if pool:
+            subgraph.update(rng.sample(pool, k=min(remaining, len(pool))))
+
+    sorted_subgraph = sorted(list(subgraph))
+    rng.shuffle(sorted_subgraph)
+    return sorted_subgraph
