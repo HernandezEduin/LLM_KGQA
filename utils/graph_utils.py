@@ -229,3 +229,28 @@ def neighborhood_subgraph_sampling_by_node(
     sorted_subgraph = sorted(list(subgraph))
     rng.shuffle(sorted_subgraph)
     return sorted_subgraph
+
+def random_subgraph_sampling_by_node(full_graph: set, start_node:str, target_size: int, rng_seed: int=42)->list:
+    """
+    Perform random subgraph sampling from single node entity over the entire graph. 
+
+    Args:
+        full_graph (set): The complete set of triplets in the graph.
+        start_node (str): Initial node entity.
+        target_size (int): Desired size of the subgraph.
+        rng_seed (int): Random seed for reproducibility.
+
+    Returns:
+        set: Subgraph containing the sampled triplets.
+    """
+    if target_size <= 0:
+        return []
+    
+    rng = Random(rng_seed)
+
+    random_samples = set(rng.sample(sorted(full_graph), k=target_size))
+
+    shuffled_samples = sorted(list(random_samples))
+    rng.shuffle(shuffled_samples)
+
+    return shuffled_samples

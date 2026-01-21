@@ -78,6 +78,11 @@ def parse_args():
     parser.add_argument('-d', '--debug', action='store_true',
                         help='Enable debug mode with verbose output.')
     
+    # retrieval
+    parser.add_argument('--retrieval-method', type=str, default='neighborhood',
+                        choices=['random', 'neighborhood'],
+                        help='Non-oracle subgraph retrieval method.')
+    
     # Result parameters
     parser.add_argument('--result-dir', type=str, default='./results',
                         help='Directory to save the results.')
@@ -265,6 +270,7 @@ if __name__ == '__main__':
             else:
                 raise ValueError(f"Unknown sampling method: {args.sampling_method}")
 
+            # Q per b
             for i1 in range(len(qa_batch)):
                 question = qa_batch['Question'].iloc[i1]
                 start_node = qa_batch['Source-Entity'].iloc[i1]
@@ -350,7 +356,7 @@ if __name__ == '__main__':
         model_name += "-instruct"
         if args.use_quantized:
             model_name += f"-q{args.quantization_bits}"
-    results_file = os.path.join(result_path, f'results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{args.sampling_method}_seed{args.seed}.json')
+    results_file = os.path.join(result_path, f'results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{args.sampling_method}_{args.retrieval_method}_seed{args.seed}.json')
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
         print(f"Results saved to {results_file}")
