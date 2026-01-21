@@ -22,6 +22,8 @@ from utils.graph_utils import (
     random_subgraph_sampling,
     neighborhood_subgraph_sampling,
     build_incidence_index,
+    neighborhood_subgraph_sampling_by_node,
+    random_subgraph_sampling_by_node
 )
 
 from collections import defaultdict
@@ -61,6 +63,8 @@ def parse_args():
                         help='Context window size for the LLM model.')
     parser.add_argument('--timeout', type=int, default=120,
                         help='Timeout in seconds for LLM API requests.')
+    parser.add_argument('--temperature', type=float, default=0,
+                        help='Sampling temperature for the LLM (0 = deterministic).')
 
     # Sampling parameters
     parser.add_argument('--seed', type=int, default=42,
@@ -79,8 +83,7 @@ def parse_args():
                         help='Enable debug mode with verbose output.')
     
     # retrieval
-    parser.add_argument('--retrieval-method', type=str, default='neighborhood',
-                        choices=['random', 'neighborhood'],
+    parser.add_argument('-r', '--retrieve', action='store_true',
                         help='Non-oracle subgraph retrieval method.')
     
     # Result parameters
@@ -218,6 +221,7 @@ if __name__ == '__main__':
         quantization_bits=args.quantization_bits,
         context_window=args.context_window,
         seed=args.seed,
+        temperature=args.temperature,
         timeout=args.timeout,
         debug=args.debug
     )
@@ -247,28 +251,29 @@ if __name__ == '__main__':
             - Random Sampling: Selects random triplets from the graph (includes evidence paths).
             - Evidence-Based Sampling: Uses predefined evidence paths.
             """
-            if args.sampling_method == 'neighborhood':
-                sub_graph = neighborhood_subgraph_sampling(
-                    full_graph=all_triplets,
-                    seeds=path_triplets,
-                    incidence=incidence,
-                    neighbors=neighbors,
-                    target_size=args.subgraph_size,
-                    max_depth=args.max_depth,
-                    rng_seed=args.seed + i0,
-                    fill_random_if_needed=True,
-                )
-            elif args.sampling_method == 'random':
-                sub_graph = random_subgraph_sampling(
-                    full_graph=all_triplets, 
-                    seeds=path_triplets, 
-                    target_size=args.subgraph_size,
-                    rng_seed=args.seed + i0
-                )
-            elif args.sampling_method == 'evidence':
-                sub_graph = path_triplets
-            else:
-                raise ValueError(f"Unknown sampling method: {args.sampling_method}")
+            if not args.retrieval:
+                if args.sampling_method == 'neighborhood':
+                    sub_graph = neighborhood_subgraph_sampling(
+                        full_graph=all_triplets,
+                        seeds=path_triplets,
+                        incidence=incidence,
+                        neighbors=neighbors,
+                        target_size=args.subgraph_size,
+                        max_depth=args.max_depth,
+                        rng_seed=args.seed + i0,
+                        fill_random_if_needed=True,
+                    )
+                elif args.sampling_method == 'random':
+                    sub_graph = random_subgraph_sampling(
+                        full_graph=all_triplets, 
+                        seeds=path_triplets, 
+                        target_size=args.subgraph_size,
+                        rng_seed=args.seed + i0
+                    )
+                elif args.sampling_method == 'evidence':
+                    sub_graph = path_triplets
+                else:
+                    raise ValueError(f"Unknown sampling method: {args.sampling_method}")
 
             # Q per b
             for i1 in range(len(qa_batch)):
@@ -277,6 +282,30 @@ if __name__ == '__main__':
                 answer = extract_final_answer(qa_batch['Answer'].iloc[i1])
                 path = qa_path_batch.iloc[i1]
                 hop = qa_batch['Hops'].iloc[i1]
+                
+                if args.retrieve:
+                    if args.sampling_method == 'neighborhood':
+                        sub_graph = neighborhood_subgraph_sampling_by_node(
+                            full_graph=all_triplets,
+                            start_node=path_triplets,
+                            incidence=incidence,
+                            neighbors=neighbors,
+                            target_size=args.subgraph_size,
+                            max_depth=args.max_depth,
+                            rng_seed=args.seed + i1,
+                            fill_random_if_needed=True,
+                        )
+                elif args.sampling_method == 'random':
+                    sub_graph = random_subgraph_sampling_by_node(
+                        full_graph=all_triplets, 
+                        start_node=path_triplets, 
+                        target_size=args.subgraph_size,
+                        rng_seed=args.seed + i1
+                    )
+                elif args.sampling_method == 'evidence':
+                    raise ValueError("Retrieval cannot use evidence.")
+                else:
+                    raise ValueError(f"Unknown sampling method: {args.sampling_method}")
 
                 pred, sub_graph_txt, status_info = client.process_question(
                     question,
@@ -323,6 +352,7 @@ if __name__ == '__main__':
                     pbar.write(f"Full Prediction: {full_pred}")
                     pbar.write(f"Subgraph Text: {sub_graph_txt}")
                     pbar.write(f"Subgraph size: {len(sub_graph)} triplets")
+                    pbar.write(f"Subgraph sampling method: {'retrieve' if args.retrieve else 'oracle'}, {args.sampling_method}")
                     pbar.write(f"Correct: {pred.lower() == answer.lower()}")
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
@@ -356,7 +386,7 @@ if __name__ == '__main__':
         model_name += "-instruct"
         if args.use_quantized:
             model_name += f"-q{args.quantization_bits}"
-    results_file = os.path.join(result_path, f'results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{args.sampling_method}_{args.retrieval_method}_seed{args.seed}.json')
+    results_file = os.path.join(result_path, f'results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_{args.retrieval_method}_seed{args.seed}.json')
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
         print(f"Results saved to {results_file}")

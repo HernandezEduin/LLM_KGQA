@@ -79,6 +79,7 @@ def chat(
     stream: bool = False,
     context_window: int = 4096,
     seed: int | None = None,
+    temperature: float | None = None,
     timeout: int = 120
 ) -> Tuple[dict, Dict[str, object]]:
     """
@@ -92,6 +93,7 @@ def chat(
         stream (bool): Whether to use streaming responses.
         context_window (int): Context window size for the model.
         seed (int | None): Optional random seed for the request.
+        temperature (float | None): Optional sampling temperature for the request.
         timeout (int): Timeout in seconds for the API request.
 
     Returns:
@@ -110,6 +112,8 @@ def chat(
 
     if seed is not None:
         payload["options"]["seed"] = int(seed)
+    if temperature is not None:
+        payload["options"]["temperature"] = float(temperature)
 
     start_time = time.time()
     try:

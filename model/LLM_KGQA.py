@@ -24,6 +24,7 @@ class LLM_KGQA_Client:
         quantization_bits: int = 4,
         context_window: int = 4096,
         seed: int | None = None, 
+        temperature: float | None = None,
         timeout: int = 120, 
         debug: bool = False
     ):
@@ -38,6 +39,7 @@ class LLM_KGQA_Client:
             quantization_bits (int): Number of bits for quantization (if using quantized model).
             context_window (int): Context window size for the model.
             seed (int | None): Optional random seed for the requests.
+            temperature (float | None): Optional sampling temperature for the requests.
             timeout (int): Timeout in seconds for LLM API requests.
             debug (bool): Enable debug mode for verbose output.
         """
@@ -62,6 +64,7 @@ class LLM_KGQA_Client:
         self.timeout = timeout
         self.context_window = context_window
         self.seed = seed
+        self.temperature = temperature
         self.debug = debug
         self.base_url, self.api_key = load_api_config(config_path)
         self.headers = {
@@ -163,6 +166,7 @@ class LLM_KGQA_Client:
             user_text=user_text,
             context_window=self.context_window, 
             seed=self.seed, 
+            temperature=self.temperature,
             timeout=self.timeout
         )
 
