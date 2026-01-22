@@ -251,7 +251,7 @@ if __name__ == '__main__':
             - Random Sampling: Selects random triplets from the graph (includes evidence paths).
             - Evidence-Based Sampling: Uses predefined evidence paths.
             """
-            if not args.retrieval: # oracle subgraph
+            if not args.retrieve: # oracle subgraph
                 if args.sampling_method == 'neighborhood':
                     sub_graph = neighborhood_subgraph_sampling(
                         full_graph=all_triplets,
@@ -287,7 +287,7 @@ if __name__ == '__main__':
                     if args.sampling_method == 'neighborhood':
                         sub_graph = neighborhood_subgraph_sampling_by_node(
                             full_graph=all_triplets,
-                            start_node=path_triplets,
+                            start_node=start_node,
                             incidence=incidence,
                             neighbors=neighbors,
                             target_size=args.subgraph_size,
@@ -298,7 +298,7 @@ if __name__ == '__main__':
                     elif args.sampling_method == 'random':
                         sub_graph = random_subgraph_sampling_by_node(
                             full_graph=all_triplets, 
-                            start_node=path_triplets, 
+                            start_node=start_node, 
                             target_size=args.subgraph_size,
                             rng_seed=args.seed + i1
                         )
@@ -386,7 +386,7 @@ if __name__ == '__main__':
         model_name += "-instruct"
         if args.use_quantized:
             model_name += f"-q{args.quantization_bits}"
-    results_file = os.path.join(result_path, f'results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json')
+    results_file = os.path.join(result_path, f"results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json")
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
         print(f"Results saved to {results_file}")
