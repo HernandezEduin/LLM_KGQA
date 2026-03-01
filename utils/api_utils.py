@@ -1,11 +1,12 @@
+import atexit
+import signal
 import requests
 import time
 
 import json
 from pathlib import Path
 
-from typing import List, Tuple, Dict
-
+from typing import List, Tuple, Dict, Optional, Callable
 
 # ---- Config loading ----
 # Expected JSON format:
@@ -183,3 +184,74 @@ def pick_model(model_ids: Dict[str, str], choice: str = 'gemma3') -> str:
 
     # Fallback: first available
     return list(model_ids.values())[0]
+
+def unload_model(
+    base_url: str,
+    headers: dict,
+    model: str,
+    timeout: int = 30,
+) -> None:
+    """
+    Ask Ollama (behind OpenWebUI) to unload the model from memory.
+
+    This uses Ollama's `keep_alive=0` behavior to release RAM/VRAM.
+    It is safe to call multiple times and should be best-effort.
+    """
+    try:
+        # Ollama accepts keep_alive on /api/chat (and /api/generate).
+        payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": ""}],
+            "stream": False,
+            "keep_alive": 0,  # unload immediately
+        }
+        r = requests.post(
+            f"{base_url}/ollama/api/chat",
+            headers=headers,
+            json=payload,
+            timeout=timeout,
+        )
+        # Best-effort cleanup; don't raise if shutdown path is already in progress.
+        try:
+            r.close()
+        finally:
+            pass
+    except Exception:
+        # Swallow everything: unloading is a cleanup step and should not mask the real exit.
+        pass
+
+
+def register_cleanup_handlers(
+    base_url: str,
+    headers: dict,
+    model: str,
+    on_cleanup: Optional[Callable[[], None]] = None,
+) -> None:
+    """
+    Ensure cleanup runs on normal exit, Ctrl+C, and SIGTERM.
+
+    - atexit: runs on normal interpreter shutdown
+    - signal handlers: runs on SIGINT/SIGTERM to unload ASAP
+    """
+    def _cleanup() -> None:
+        unload_model(base_url, headers, model)
+        if on_cleanup is not None:
+            try:
+                on_cleanup()
+            except Exception:
+                pass
+
+    # 1) Normal interpreter shutdown
+    atexit.register(_cleanup)
+
+    # 2) Signals (Ctrl+C is SIGINT; many schedulers send SIGTERM)
+    def _handler(signum, frame) -> None:
+        _cleanup()
+        raise KeyboardInterrupt  # preserve expected Ctrl+C semantics
+
+    for sig in (signal.SIGINT, signal.SIGTERM):
+        try:
+            signal.signal(sig, _handler)
+        except Exception:
+            # Not all environments allow setting handlers (e.g., some notebooks/threads)
+            pass

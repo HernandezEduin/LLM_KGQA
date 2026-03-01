@@ -1,9 +1,13 @@
+import atexit
+import signal
+
 from pathlib import Path
 import random
+import threading
 
 from model.constants import valid_models, has_instruct_versions, has_quantized_versions, context_window_limits
 from utils.kgqa_utils import translate_path
-from utils.api_utils import list_models, chat, extract_model_ids, pick_model, load_api_config
+from utils.api_utils import list_models, chat, extract_model_ids, pick_model, load_api_config, register_cleanup_handlers, unload_model
 
 from typing import List, Tuple
 
@@ -84,13 +88,24 @@ class LLM_KGQA_Client:
 
         self.change_llm(model_name)
 
+        
+        self._closed = False
+        self._cleanup_lock = threading.Lock()
+        self._register_cleanup()
+
     def change_llm(self, model_name: str):
         """
         Change the current LLM model.
-
-        Args:
-            model_name (str): Name of the model to switch to.
+        Unload the previous model first to avoid GPU memory staying allocated.
         """
+        prev = getattr(self, "model_choice", None)
+        if prev is not None and prev != model_name:
+            # unload previous model best-effort
+            try:
+                unload_model(self.base_url, self.headers, prev)
+            except Exception:
+                pass
+
         self.model_choice = pick_model(self.model_ids, choice=model_name)
         print("\nUsing model:", self.model_choice)
 
@@ -267,3 +282,46 @@ class LLM_KGQA_Client:
             out["response_seconds"] = ns_to_s(raw["eval_duration"])
 
         return out
+    
+    def _register_cleanup(self) -> None:
+        """
+        Register process-level cleanup hooks once per client instance.
+        """
+        # If you want to use the standalone helper from api_utils:
+        register_cleanup_handlers(self.base_url, self.headers, self.model_choice)
+
+        # Additionally register atexit that calls the instance method (keeps it idempotent)
+        atexit.register(self.close)
+
+        # And catch signals here too (so close() is used, not a raw unload)
+        def _handler(signum, frame):
+            self.close()
+            raise KeyboardInterrupt
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            try:
+                signal.signal(sig, _handler)
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        """
+        Explicitly unload the model to free RAM/VRAM.
+        Safe to call multiple times.
+        """
+        with self._cleanup_lock:
+            if self._closed:
+                return
+            self._closed = True
+        try:
+            # best-effort unload (keeps process alive but frees model memory)
+            unload_model(self.base_url, self.headers, self.model_choice)
+        except Exception:
+            pass
+
+    def __del__(self):
+        # Destructor is NOT guaranteed to run, but it's a helpful fallback.
+        try:
+            self.close()
+        except Exception:
+            pass
