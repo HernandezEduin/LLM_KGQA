@@ -6,3 +6,6 @@
 /results/*
 /plots/*
 /wandb/*
+
+# my runfile
+run_sims.sh

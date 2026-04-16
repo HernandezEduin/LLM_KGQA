@@ -59,4 +59,4 @@ if __name__ == "__main__":
 
     out = client.chat(model=chosen, user_text="Write a short Python function that computes gcd(a,b).")
     print("\nResponse JSON:")
-    print(out[0]["message"]["content"])
+    print(out)
