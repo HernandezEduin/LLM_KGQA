@@ -1,5 +1,6 @@
 valid_models = [
-    'gemma3', 
+    'gemma3',
+    'gemma4', 
     'llama3', 
     'llama3.1', 
     'deepseek-r1', 
@@ -11,7 +12,8 @@ valid_models = [
 ]
 
 has_instruct_versions = {
-    'gemma3': False, 
+    'gemma3': False,
+    'gemma4': False,
     'llama3': False, 
     'llama3.1': True, 
     'deepseek-r1': False, 
@@ -22,7 +24,8 @@ has_instruct_versions = {
 }
 
 has_quantized_versions = {
-    'gemma3': False, 
+    'gemma3': False,
+    'gemma4': False,
     'llama3': False, 
     'llama3.1': True, 
     'deepseek-r1': False, 
@@ -34,6 +37,7 @@ has_quantized_versions = {
 
 context_window_limits = {
     'gemma3': 128*1024,
+    'gemma4': 128*1024,
     'llama3': 8*1024,
     'llama3.1': 128*1024,
     'deepseek-r1': 128*1024,
