@@ -16,7 +16,7 @@ import warnings
 from model.LLM_KGQA import LLM_KGQA_Client
 from model.constants import valid_models
 
-from utils.basic import load_triplets, extract_literals
+from utils.basic import load_triplets, load_pandas, extract_literals
 from utils.kgqa_utils import extract_final_answer
 from utils.graph_utils import (
     random_subgraph_sampling,
@@ -185,11 +185,11 @@ if __name__ == '__main__':
     data_dir = os.path.join(args.data_dir, args.dataset)
     qa_file = os.path.join(data_dir, f'qa_{args.hops}hop.csv')
     triplet_file = os.path.join(data_dir, 'triplets.txt')
-    entity_file = os.path.join(data_dir, 'vocab/entity_title.json')
-    relation_file = os.path.join(data_dir, 'vocab/relation_title.json')
+    entity_file = os.path.join(data_dir, 'node_data.csv')
+    relation_file = os.path.join(data_dir, 'relation_data.csv')
 
     # Load QA dataset
-    qa_df = pd.read_csv(qa_file)
+    qa_df = load_pandas(qa_file)
     qa_df = qa_df[qa_df['SplitLabel'] == 'test']
 
     # Extract triplets from paths
@@ -199,11 +199,11 @@ if __name__ == '__main__':
         print(f"Total unique triplets in paths: {len(df_triplets)}")
 
     # Load entity and relation mappings
-    with open(entity_file, 'r', encoding='utf-8') as f:
-        entity_title = json.load(f)
+    entity_df = load_pandas(entity_file)
+    relation_df = load_pandas(relation_file)
 
-    with open(relation_file, 'r', encoding='utf-8') as f:
-        relation_title = json.load(f)
+    entity_title = dict(zip(entity_df['QID'], entity_df['Title']))
+    relation_title = dict(zip(relation_df['Property'], relation_df['Title']))
 
     # Load all triplets and build indices
     all_triplets = load_triplets(triplet_file)
