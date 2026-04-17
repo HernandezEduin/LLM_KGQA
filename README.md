@@ -58,3 +58,4 @@ This project is licensed under the Academic License.
 - [ ] Add a functionality that converts the triplets of the subgraph into a sentence instead.
 - [x] Add a feature to calculate the number of tokens in the prompt.
 - [x] Add a feature to increment the context window of the llm (num_ctx).
+- [ ] Add an option to just evalute the LLM on the question without any context (zero-shot), just the question and the answer choices (if any).

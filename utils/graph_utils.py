@@ -1,5 +1,10 @@
 from collections import defaultdict
 from random import Random
+import pandas as pd
+
+from typing import Any, List, Tuple, Set, Dict, Union
+
+import sys
 
 def build_incidence_index(full_graph: set):
     """
@@ -24,6 +29,25 @@ def build_incidence_index(full_graph: set):
         neighbors[t].add(h)
 
     return incidence, neighbors
+
+def build_relation_index(
+    full_graph: set
+) -> Dict[str, Dict[str, List[Tuple[str, str, str]]]]:
+    """
+    Builds an index for quick lookup of triplets based on their relation and head entity.
+
+    Args:
+        triplet_df (pd.DataFrame): A DataFrame containing triplets with columns 'head', 'relation', and 'tail'.
+    Returns:
+        Dict[str, Dict[str, List[Tuple[str, str, str]]]]: A nested dictionary where the first key is the relation, 
+            the second key is the head entity, and the value is a list of triplets that match the relation and head.
+    """
+    relation_index: Dict[str, Dict[str, List[Tuple[str, str, str]]]] = {}
+
+    for h, r, t in full_graph:
+        relation_index.setdefault(r, {}).setdefault(h, []).append((h, r, t))
+
+    return relation_index
 
 def random_subgraph_sampling(full_graph: set, seeds: set, target_size: int, rng_seed: int = 42) -> list:
     """
@@ -254,3 +278,48 @@ def random_subgraph_sampling_by_node(full_graph: set, start_node:str, target_siz
     rng.shuffle(shuffled_samples)
 
     return shuffled_samples
+
+def generate_multi_answer_paths_from_source(
+    source_entity: str,
+    rel_list: List[str],
+    relation_index: Dict[str, Dict[str, List[Tuple[str, str, str]]]],
+) -> List[List[Tuple[str, str, str]]]:
+    """
+    Generate continuous paths that start from the same source entity, follow the same
+    relation sequence, and collectively yield multiple distinct final answers.
+
+    Args:
+        source_entity (str): The entity to start the path from.
+        rel_list (List[str]): A list of relations that defines the required path pattern.
+        relation_index (Dict[str, Dict[str, List[Tuple[str, str, str]]]]): A nested dictionary for quick
+            lookup of triplets by relation and head entity.
+
+    Returns:
+        List[List[Tuple[str, str, str]]]: A list of continuous paths that begin at the given source entity
+            and produce at least two distinct answers for the same relation sequence.
+    """
+    if not rel_list:
+        return []
+
+    candidate_paths: List[List[Tuple[str, str, str]]] = []
+
+    def dfs(step_idx: int, current_entity: str, current_path: List[Tuple[str, str, str]]) -> None:
+        if step_idx == len(rel_list):
+            candidate_paths.append(list(current_path))
+            return
+
+        next_relation = rel_list[step_idx]
+        next_triplets = relation_index.get(next_relation, {}).get(current_entity, [])
+
+        for triplet in next_triplets:
+            current_path.append(triplet)
+            dfs(step_idx + 1, triplet[2], current_path)
+            current_path.pop()
+
+    first_relation = rel_list[0]
+    first_triplets = relation_index.get(first_relation, {}).get(source_entity, [])
+
+    for first_triplet in first_triplets:
+        dfs(1, first_triplet[2], [first_triplet])
+
+    return candidate_paths

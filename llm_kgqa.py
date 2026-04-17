@@ -17,13 +17,15 @@ from model.LLM_KGQA import LLM_KGQA_Client
 from model.constants import valid_models
 
 from utils.basic import load_triplets, load_pandas, extract_literals
-from utils.kgqa_utils import extract_final_answer
+from utils.kgqa_utils import compare_answers, extract_final_answer
 from utils.graph_utils import (
     random_subgraph_sampling,
     neighborhood_subgraph_sampling,
     build_incidence_index,
+    build_relation_index,
     neighborhood_subgraph_sampling_by_node,
-    random_subgraph_sampling_by_node
+    random_subgraph_sampling_by_node,
+    generate_multi_answer_paths_from_source
 )
 
 from collections import defaultdict
@@ -188,27 +190,53 @@ if __name__ == '__main__':
     entity_file = os.path.join(data_dir, 'node_data.csv')
     relation_file = os.path.join(data_dir, 'relation_data.csv')
 
-    # Load QA dataset
-    qa_df = load_pandas(qa_file)
-    qa_df = qa_df[qa_df['SplitLabel'] == 'test']
-
-    # Extract triplets from paths
-    df_paths = extract_literals(qa_df["Paths"])
-    df_triplets = set(tuple(triplet) for triplet in df_paths.explode())
-    if args.debug:
-        print(f"Total unique triplets in paths: {len(df_triplets)}")
-
     # Load entity and relation mappings
     entity_df = load_pandas(entity_file)
     relation_df = load_pandas(relation_file)
 
-    entity_title = dict(zip(entity_df['QID'], entity_df['Title']))
-    relation_title = dict(zip(relation_df['Property'], relation_df['Title']))
+    entity_df.set_index('QID', inplace=True)
+    relation_df.set_index('Property', inplace=True)
+
+    entity_title = entity_df['Title'].to_dict()
+    relation_title = relation_df['Title'].to_dict()
 
     # Load all triplets and build indices
     all_triplets = load_triplets(triplet_file)
     all_triplets = set(tuple(triplet) for triplet in all_triplets.values)
     incidence, neighbors = build_incidence_index(all_triplets)
+
+    # Load QA dataset
+    qa_df = load_pandas(qa_file)
+    qa_df = qa_df[qa_df['SplitLabel'] == 'test']
+
+    is_multi_answer = False
+    # check if answers are lists (multi-answer) or single values, and adjust accordingly
+    if qa_df['Answer'].apply(lambda x: isinstance(x, str) and '[' == x[0]).all():
+        qa_df['Answer'] = extract_literals(qa_df["Answer"])
+        qa_df['Answer-Entity'] = extract_literals(qa_df["Answer-Entity"])
+        is_multi_answer = True
+
+    # Extract triplets from paths
+    is_multi_path = False
+    if "Paths" in qa_df.columns:
+        qa_df['Paths'] = extract_literals(qa_df["Paths"])
+    elif "Path-Key" in qa_df.columns:
+        relation_index = build_relation_index(all_triplets) # build relation index for evidence-based sampling
+        qa_df['Path-Key'] = qa_df['Path-Key'].apply(lambda x: x.split('->')) # split the path keys into lists
+        
+        qa_df['Paths'] = qa_df.apply(lambda row: generate_multi_answer_paths_from_source(
+            source_entity=row['Source-Entity'],
+            rel_list=row['Path-Key'],
+            relation_index=relation_index
+        ), axis=1)
+
+        # print(qa_df['Path-Key'].head(5))
+        # print(qa_df['Paths'].head(5))
+        # print(qa_df['Paths'].apply(len).head(5))
+        is_multi_path = True
+    else:
+        raise ValueError("QA dataframe must contain either 'Paths' or 'Path-Key' column for evidence paths.")
+    
 
     # prepare client
     CONFIG_PATH = Path(__file__).with_name("openwebui_config.json").parent / "configs" / "openwebui_config.json"
@@ -241,8 +269,11 @@ if __name__ == '__main__':
     with tqdm(range(0, total_batches), desc="Processing Batches") as pbar:
         for i0 in pbar:
             qa_batch = qa_df[i0*args.batch_size:(i0+1)*args.batch_size]         # return the last smaller batch as is, even if size < batch_size
-            qa_path_batch = df_paths[i0*args.batch_size:(i0+1)*args.batch_size]
-            path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode())
+            qa_path_batch = qa_batch['Paths']
+            if is_multi_path:
+                path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode().explode())
+            else:
+                path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode())
 
             # Subgraph Sampling
             """
@@ -279,10 +310,9 @@ if __name__ == '__main__':
             for i1 in range(len(qa_batch)):
                 question = qa_batch['Question'].iloc[i1]
                 start_node = qa_batch['Source-Entity'].iloc[i1]
-                answer = extract_final_answer(qa_batch['Answer'].iloc[i1])
-                path = qa_path_batch.iloc[i1]
+                answer = extract_final_answer(qa_batch['Answer'].iloc[i1], lower=True)
                 hop = qa_batch['Hops'].iloc[i1]
-                
+
                 if args.retrieve: # non-oracle subgraph retrieval
                     if args.sampling_method == 'neighborhood':
                         sub_graph = neighborhood_subgraph_sampling_by_node(
@@ -318,8 +348,8 @@ if __name__ == '__main__':
                 )
                 # create a copy of the full prediction before extracting final answer
                 full_pred = pred
-                pred = extract_final_answer(pred)
-                result = pred.lower() == answer.lower()
+                pred = extract_final_answer(pred, lower=False)
+                result = compare_answers(pred.lower(), answer)
 
                 update_stats(
                     statistics['overall'], 
@@ -353,7 +383,7 @@ if __name__ == '__main__':
                     pbar.write(f"Subgraph Text: {sub_graph_txt}")
                     pbar.write(f"Subgraph size: {len(sub_graph)} triplets")
                     pbar.write(f"Subgraph sampling method: {'retrieve' if args.retrieve else 'oracle'}, {args.sampling_method}")
-                    pbar.write(f"Correct: {pred.lower() == answer.lower()}")
+                    pbar.write(f"Correct: {compare_answers(pred.lower(), answer)}")
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
             pbar.set_description(f"Processing Batches (Accuracy: {statistics['overall']['accuracy']}/{statistics['overall']['running_count']} = {statistics['overall']['accuracy']/statistics['overall']['running_count']:.4f})")

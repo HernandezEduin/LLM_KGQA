@@ -1,5 +1,5 @@
 import re
-from typing import List, Tuple
+from typing import List, Tuple, Union
 
 def translate_path(triplet_path: List[Tuple[str, str, str]], entity_title: dict, relation_title: dict) -> List[Tuple[str, str, str]]:
     """
@@ -21,17 +21,41 @@ def translate_path(triplet_path: List[Tuple[str, str, str]], entity_title: dict,
         readable_path.append((head_name, relation_name, tail_name))
     return readable_path
 
-def extract_final_answer(output: str) -> str:
+def extract_final_answer(output: Union[str, List[str]], lower: bool = False) -> Union[str, List[str]]:
     """
-    Extract the final answer from the LLM output.
+    Extract the final answer from the model's output, which may contain additional text.
 
     Args:
-        output (str): The raw output from the LLM.
+        output (Union[str, List[str]]): The raw output from the model, which can be a string or a list of strings.
+        lower (bool): Whether to convert the extracted answer(s) to lowercase.
+
     Returns:
-        str: The cleaned final answer.
+        Union[str, List[str]]: The extracted final answer(s).
+    """
+    if isinstance(output, list):
+        res = [_clearn_answer(ans) for ans in output]
+    else:
+        res = _clearn_answer(output)
+
+    if lower:
+        if isinstance(output, list):
+            res = [ans.lower() for ans in res]
+        else:
+            res = res.lower()
+    return res
+
+def _clearn_answer(answer: str) -> str:
+    """
+    Clean the answer string by removing leading phrases and extraneous characters.
+
+    Args:
+        answer (str): The raw answer string.
+    
+    Returns:
+        str: The cleaned answer string.
     """
     # Remove leading phrases like "Answer:", "The answer is", etc.
-    cleaned = re.sub(r'(?i)(^.*?(answer is|final answer|output|response)[:,\s]*)', '', output)
+    cleaned = re.sub(r'(?i)(^.*?(answer is|final answer|output|response)[:,\s]*)', '', answer)
     # Take the first line or token until punctuation
     cleaned = cleaned.strip().split("\n")[0] #.split(".")[0] # TODO: verify if "." is a good idea, i.e., "U.S.A."
     # Optional: remove quotes, trailing punctuation
@@ -39,3 +63,19 @@ def extract_final_answer(output: str) -> str:
     # remove parentheses
     cleaned = re.sub(r'[\(\)]', '', cleaned)
     return cleaned
+
+def compare_answers(pred: str, gold: Union[str, List[str]]) -> bool:
+    """
+    Compare the predicted answer with the gold answer, ignoring case and whitespace.
+
+    Args:
+        pred (str): The predicted answer.
+        gold (str): The gold answer.
+
+    Returns:
+        bool: True if the answers match, False otherwise.
+    """
+    if isinstance(gold, list):
+        return pred in gold
+    else:
+        return pred == gold
