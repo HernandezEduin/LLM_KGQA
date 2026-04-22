@@ -153,9 +153,6 @@ class LLM_KGQA_Client:
             grouped_triplets: Sequence[Sequence[Tuple[str, str, str]]],
             entity_title: dict,
             relation_title: dict,
-            entity_description: dict | None = None,
-            relation_description: dict | None = None,
-            include_descriptions: bool = False,
         ) -> Tuple[str, str]:
         """
         Prepare a prompt for SG-RAG style grouped subgraphs.
@@ -167,16 +164,10 @@ class LLM_KGQA_Client:
                 sequence contains the triplets of one matched subgraph.
             entity_title (dict): Mapping of entity IDs to titles.
             relation_title (dict): Mapping of relation IDs to titles.
-            entity_description (dict | None): Optional mapping of entity IDs to descriptions.
-            relation_description (dict | None): Optional mapping of relation IDs to descriptions.
-            include_descriptions (bool): Whether to append a compact metadata glossary.
 
         Returns:
             Tuple[str, str]: The prompt and the rendered grouped subgraph text.
         """
-        entity_description = entity_description or {}
-        relation_description = relation_description or {}
-
         start_node_str = entity_title.get(start_node, start_node)
         rendered_subgraphs = []
         used_entities = set()
@@ -193,35 +184,12 @@ class LLM_KGQA_Client:
 
         grouped_text = "\n\n".join(rendered_subgraphs) if rendered_subgraphs else "Subgraph 1:\n\t()"
 
-        glossary_sections = []
-        if include_descriptions:
-            entity_lines = []
-            for entity_id in sorted(used_entities, key=lambda value: entity_title.get(value, value)):
-                description = entity_description.get(entity_id, "")
-                if description:
-                    entity_lines.append(f"- {entity_title.get(entity_id, entity_id)}: {description}")
-
-            relation_lines = []
-            for relation_id in sorted(used_relations, key=lambda value: relation_title.get(value, value)):
-                description = relation_description.get(relation_id, "")
-                if description:
-                    relation_lines.append(f"- {relation_title.get(relation_id, relation_id)}: {description}")
-
-            if entity_lines:
-                glossary_sections.append("Entity Hints:\n" + "\n".join(entity_lines))
-            if relation_lines:
-                glossary_sections.append("Relation Hints:\n" + "\n".join(relation_lines))
-
-        glossary_text = "\n\n".join(glossary_sections)
-        if glossary_text:
-            glossary_text = "\n\n" + glossary_text
-
         template = (
             "You will be given a natural-language question, a starting node, and one or more retrieved "
             "knowledge-graph subgraphs.\n"
             "Each subgraph is written as ordered (subject, relation, object) triplets.\n"
             "Use ONLY the retrieved subgraphs to answer the question.\n"
-            "If the answer is not supported by the retrieved subgraphs, reply exactly: UNKNOWN.\n"
+            # "If the answer is not supported by the retrieved subgraphs, reply exactly: UNKNOWN.\n"
             "If multiple answers are supported by the retrieved subgraphs, return exactly one supported answer.\n"
             "Return only the final answer (no explanation, no reasoning, no extra text).\n"
             "Double-check the spelling of your answer.\n\n"
@@ -229,9 +197,8 @@ class LLM_KGQA_Client:
             f"Starting Node: {start_node_str}\n"
             "Retrieved Subgraphs:\n"
             f"{grouped_text}"
-            f"{glossary_text}\n\n"
         )
-        return template, grouped_text + glossary_text
+        return template, grouped_text
 
     def prepare_path_prompt(
             self,
@@ -240,9 +207,6 @@ class LLM_KGQA_Client:
             grouped_triplets: Sequence[Sequence[Tuple[str, str, str]]],
             entity_title: dict,
             relation_title: dict,
-            entity_description: dict | None = None,
-            relation_description: dict | None = None,
-            include_descriptions: bool = False,
         ) -> Tuple[str, str]:
         """
         Prepare a prompt for PathRAG style retrieved relational paths.
@@ -254,16 +218,10 @@ class LLM_KGQA_Client:
                 sequence contains the triplets of one relational path.
             entity_title (dict): Mapping of entity IDs to titles.
             relation_title (dict): Mapping of relation IDs to titles.
-            entity_description (dict | None): Optional mapping of entity IDs to descriptions.
-            relation_description (dict | None): Optional mapping of relation IDs to descriptions.
-            include_descriptions (bool): Whether to append a compact metadata glossary.
 
         Returns:
             Tuple[str, str]: The prompt and rendered path text.
         """
-        entity_description = entity_description or {}
-        relation_description = relation_description or {}
-
         start_node_str = entity_title.get(start_node, start_node)
         rendered_paths = []
         used_entities = set()
@@ -280,29 +238,6 @@ class LLM_KGQA_Client:
 
         rendered_text = "\n\n".join(rendered_paths) if rendered_paths else "Path 1:\n\t()"
 
-        glossary_sections = []
-        if include_descriptions:
-            entity_lines = []
-            for entity_id in sorted(used_entities, key=lambda value: entity_title.get(value, value)):
-                description = entity_description.get(entity_id, "")
-                if description:
-                    entity_lines.append(f"- {entity_title.get(entity_id, entity_id)}: {description}")
-
-            relation_lines = []
-            for relation_id in sorted(used_relations, key=lambda value: relation_title.get(value, value)):
-                description = relation_description.get(relation_id, "")
-                if description:
-                    relation_lines.append(f"- {relation_title.get(relation_id, relation_id)}: {description}")
-
-            if entity_lines:
-                glossary_sections.append("Entity Hints:\n" + "\n".join(entity_lines))
-            if relation_lines:
-                glossary_sections.append("Relation Hints:\n" + "\n".join(relation_lines))
-
-        glossary_text = "\n\n".join(glossary_sections)
-        if glossary_text:
-            glossary_text = "\n\n" + glossary_text
-
         template = (
             "You will be given a natural-language question, a starting node, and one or more retrieved "
             "relational paths from a knowledge graph.\n"
@@ -310,7 +245,7 @@ class LLM_KGQA_Client:
             "The paths are ordered from lower to higher retrieval reliability, so later paths are usually "
             "more reliable.\n"
             "Use ONLY the retrieved paths to answer the question.\n"
-            "If the answer is not supported by the retrieved paths, reply exactly: UNKNOWN.\n"
+            # "If the answer is not supported by the retrieved paths, reply exactly: UNKNOWN.\n"
             "If multiple answers are supported by the retrieved paths, return exactly one supported answer.\n"
             "Return only the final answer (no explanation, no reasoning, no extra text).\n"
             "Double-check the spelling of your answer.\n\n"
@@ -318,9 +253,8 @@ class LLM_KGQA_Client:
             f"Starting Node: {start_node_str}\n"
             "Retrieved Paths:\n"
             f"{rendered_text}"
-            f"{glossary_text}\n\n"
         )
-        return template, rendered_text + glossary_text
+        return template, rendered_text
 
     def _fetch_models(self):
         """
@@ -415,9 +349,6 @@ class LLM_KGQA_Client:
         grouped_triplets: Sequence[Sequence[Tuple[str, str, str]]],
         entity_title: dict,
         relation_title: dict,
-        entity_description: dict | None = None,
-        relation_description: dict | None = None,
-        include_descriptions: bool = False,
     ) -> str:
         """
         Process a question using SG-RAG style grouped subgraphs.
@@ -428,9 +359,6 @@ class LLM_KGQA_Client:
             grouped_triplets=grouped_triplets,
             entity_title=entity_title,
             relation_title=relation_title,
-            entity_description=entity_description,
-            relation_description=relation_description,
-            include_descriptions=include_descriptions,
         )
         out, status_info = self.chat(user_text=template)
         status_info.update(self.normalize_usage(out))
@@ -457,9 +385,6 @@ class LLM_KGQA_Client:
         grouped_triplets: Sequence[Sequence[Tuple[str, str, str]]],
         entity_title: dict,
         relation_title: dict,
-        entity_description: dict | None = None,
-        relation_description: dict | None = None,
-        include_descriptions: bool = False,
     ) -> str:
         """
         Process a question using PathRAG style retrieved paths.
@@ -470,9 +395,6 @@ class LLM_KGQA_Client:
             grouped_triplets=grouped_triplets,
             entity_title=entity_title,
             relation_title=relation_title,
-            entity_description=entity_description,
-            relation_description=relation_description,
-            include_descriptions=include_descriptions,
         )
         out, status_info = self.chat(user_text=template)
         status_info.update(self.normalize_usage(out))

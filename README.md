@@ -67,7 +67,6 @@ conda run -n llms python llm_kgqa.py \
   --sampling-method sg_rag \
   --rag-max-hop 4 \
   --rag-top-contexts 5 \
-  --rag-include-descriptions \
   --sg-top-query-patterns 1 \
   --llm-model qwen2.5 \
   --use-instruct
@@ -109,7 +108,6 @@ conda run -n llms python llm_kgqa.py \
   --sampling-method path_rag \
   --rag-max-hop 4 \
   --rag-top-contexts 8 \
-  --rag-include-descriptions \
   --path-top-nodes 8 \
   --path-alpha 0.8 \
   --path-threshold 0.3 \

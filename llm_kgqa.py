@@ -99,8 +99,6 @@ def parse_args():
         help='Maximum hop count explored by the active RAG retriever.')
     parser.add_argument('--rag-max-branching', type=int, default=16,
         help='Maximum number of candidate edges retained per expansion step in the active RAG retriever.')
-    parser.add_argument('--rag-include-descriptions', action='store_true', 
-        help='Append entity and relation descriptions for RAG-based prompts.')
 
     # SG-RAG retrieval parameters
     parser.add_argument('--sg-top-query-patterns', type=int, default=5,
@@ -397,9 +395,6 @@ if __name__ == '__main__':
                         grouped_triplets=retrieval_result.grouped_triplets,
                         entity_title=entity_title,
                         relation_title=relation_title,
-                        entity_description=entity_description,
-                        relation_description=relation_description,
-                        include_descriptions=args.rag_include_descriptions,
                     )
                 elif args.sampling_method == 'path_rag':
                     retrieval_result = path_rag_retriever.retrieve(
@@ -423,9 +418,6 @@ if __name__ == '__main__':
                         grouped_triplets=retrieval_result.grouped_triplets,
                         entity_title=entity_title,
                         relation_title=relation_title,
-                        entity_description=entity_description,
-                        relation_description=relation_description,
-                        include_descriptions=args.rag_include_descriptions,
                     )
                 else:
                     if args.retrieve: # non-oracle subgraph retrieval
@@ -538,10 +530,8 @@ if __name__ == '__main__':
         if args.use_quantized:
             model_name += f"-q{args.quantization_bits}"
     subgraph_descriptor = args.subgraph_size
-    if args.sampling_method == 'sg_rag':
-        subgraph_descriptor = f"sgsubgraphs{args.rag_top_contexts}"
-    elif args.sampling_method == 'path_rag':
-        subgraph_descriptor = f"pathragpaths{args.rag_top_contexts}"
+    if args.sampling_method in retrieval_methods:
+        subgraph_descriptor = args.rag_top_contexts
     results_file = os.path.join(result_path, f"results_{args.hops}hop_{model_name}_subgraph{subgraph_descriptor}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json")
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
