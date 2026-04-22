@@ -1,55 +1,23 @@
 from __future__ import annotations
 
-import math
-import re
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Sequence, Tuple
 
 import pandas as pd
 
-Triplet = Tuple[str, str, str]
-
-TOKEN_RE = re.compile(r"[a-z0-9]+")
-QID_RE = re.compile(r"\bq\d+\b", flags=re.IGNORECASE)
-PARENS_QID_RE = re.compile(r"\(\s*Q\d+\s*\)", flags=re.IGNORECASE)
-
-STOPWORDS = {
-    "a",
-    "an",
-    "and",
-    "are",
-    "as",
-    "at",
-    "be",
-    "by",
-    "did",
-    "does",
-    "for",
-    "from",
-    "in",
-    "into",
-    "is",
-    "it",
-    "its",
-    "name",
-    "of",
-    "on",
-    "or",
-    "that",
-    "the",
-    "their",
-    "this",
-    "to",
-    "what",
-    "when",
-    "where",
-    "which",
-    "who",
-    "whom",
-    "whose",
-    "with",
-}
+from utils.rag_utils import (
+    Triplet,
+    build_text_metadata,
+    compute_idf,
+    dedupe_preserve_order,
+    dedupe_triplets,
+    flatten_unique_triplets,
+    normalize_phrase,
+    normalize_question_template,
+    tokenize,
+    weighted_overlap_score,
+)
 
 
 @dataclass(frozen=True)
@@ -73,98 +41,6 @@ class SGRAGRetrievalResult:
     candidate_query_patterns: Tuple[Tuple[str, ...], ...]
 
 
-def _split_aliases(alias: str) -> str:
-    if not alias:
-        return ""
-    return alias.replace("|", " ")
-
-
-def _combine_metadata_text(title: str, description: str, alias: str) -> str:
-    parts = [title or "", description or "", _split_aliases(alias)]
-    return " ".join(part.strip() for part in parts if part and str(part).strip())
-
-
-def _tokenize(text: str) -> Tuple[str, ...]:
-    tokens = [
-        token
-        for token in TOKEN_RE.findall((text or "").lower())
-        if len(token) > 1 and token not in STOPWORDS
-    ]
-    return tuple(tokens)
-
-
-def _compute_idf(documents: Iterable[Sequence[str]]) -> Dict[str, float]:
-    documents = [set(doc) for doc in documents if doc]
-    total_docs = len(documents)
-    if total_docs == 0:
-        return {}
-
-    doc_freq: Counter[str] = Counter()
-    for doc in documents:
-        doc_freq.update(doc)
-
-    return {
-        token: math.log((1 + total_docs) / (1 + freq)) + 1.0
-        for token, freq in doc_freq.items()
-    }
-
-
-def _weighted_overlap_score(
-    query_tokens: Sequence[str],
-    doc_tokens: Sequence[str],
-    idf: Dict[str, float],
-) -> float:
-    if not query_tokens or not doc_tokens:
-        return 0.0
-
-    query_set = set(query_tokens)
-    doc_set = set(doc_tokens)
-    overlap = query_set.intersection(doc_set)
-    if not overlap:
-        return 0.0
-
-    numerator = sum(idf.get(token, 1.0) for token in overlap)
-    denominator = math.sqrt(sum(idf.get(token, 1.0) for token in doc_set))
-    if denominator == 0:
-        return numerator
-    return numerator / denominator
-
-
-def _normalize_question_template(
-    question: str,
-    source_title: Optional[str] = None,
-    source_id: Optional[str] = None,
-) -> str:
-    normalized = (question or "").strip()
-    normalized = PARENS_QID_RE.sub(" ", normalized)
-    normalized = QID_RE.sub(" ", normalized)
-
-    if source_title:
-        normalized = re.sub(
-            re.escape(source_title),
-            " SOURCE ",
-            normalized,
-            flags=re.IGNORECASE,
-        )
-
-    if source_id:
-        normalized = re.sub(
-            re.escape(source_id),
-            " SOURCE_ID ",
-            normalized,
-            flags=re.IGNORECASE,
-        )
-
-    normalized = re.sub(r"\s+", " ", normalized)
-    return normalized.strip()
-
-
-def _normalize_phrase(text: str) -> str:
-    normalized = re.sub(r"[^a-z0-9]+", " ", (text or "").lower())
-    normalized = re.sub(r"\s+", " ", normalized).strip()
-    return normalized
-
-
 class OfflineSGRAGRetriever:
     """
     Offline approximation of SG-RAG.
@@ -184,50 +60,20 @@ class OfflineSGRAGRetriever:
         entity_df: pd.DataFrame,
         relation_df: pd.DataFrame,
     ):
-        self.triplets = tuple(sorted({tuple(triplet) for triplet in triplets}))
+        self.triplets = dedupe_triplets(triplets)
 
-        entity_frame = entity_df.copy()
-        relation_frame = relation_df.copy()
-
-        if "QID" not in entity_frame.columns:
-            entity_frame = entity_frame.reset_index()
-        if "Property" not in relation_frame.columns:
-            relation_frame = relation_frame.reset_index()
-
-        entity_frame = entity_frame.fillna("")
-        relation_frame = relation_frame.fillna("")
-
-        self.entity_title = dict(zip(entity_frame["QID"], entity_frame["Title"]))
-        self.entity_description = dict(zip(entity_frame["QID"], entity_frame["Description"]))
-        self.entity_alias = dict(zip(entity_frame["QID"], entity_frame["Alias"]))
-
-        self.relation_title = dict(zip(relation_frame["Property"], relation_frame["Title"]))
-        self.relation_description = dict(zip(relation_frame["Property"], relation_frame["Description"]))
-        self.relation_alias = dict(zip(relation_frame["Property"], relation_frame["Alias"]))
-
-        self.entity_tokens = {
-            entity_id: _tokenize(
-                _combine_metadata_text(
-                    self.entity_title.get(entity_id, entity_id),
-                    self.entity_description.get(entity_id, ""),
-                    self.entity_alias.get(entity_id, ""),
-                )
-            )
-            for entity_id in self.entity_title
-        }
-        self.relation_tokens = {
-            relation_id: _tokenize(
-                _combine_metadata_text(
-                    self.relation_title.get(relation_id, relation_id),
-                    self.relation_description.get(relation_id, ""),
-                    self.relation_alias.get(relation_id, ""),
-                )
-            )
-            for relation_id in self.relation_title
-        }
+        metadata = build_text_metadata(entity_df=entity_df, relation_df=relation_df)
+        self.entity_title = metadata.entity_title
+        self.entity_description = metadata.entity_description
+        self.entity_alias = metadata.entity_alias
+        self.relation_title = metadata.relation_title
+        self.relation_description = metadata.relation_description
+        self.relation_alias = metadata.relation_alias
+        self.entity_tokens = metadata.entity_tokens
+        self.relation_tokens = metadata.relation_tokens
 
         text_documents: List[Sequence[str]] = list(self.entity_tokens.values()) + list(self.relation_tokens.values())
-        self.text_idf = _compute_idf(text_documents)
+        self.text_idf = compute_idf(text_documents)
 
         self.outgoing: Dict[str, List[Triplet]] = defaultdict(list)
         self.outgoing_by_relation: Dict[str, Dict[str, List[Triplet]]] = defaultdict(lambda: defaultdict(list))
@@ -255,8 +101,8 @@ class OfflineSGRAGRetriever:
         min_hops = max(1, min(int(min_hops), max_hops))
 
         source_title = self.entity_title.get(start_node, start_node)
-        normalized_question = _normalize_question_template(question, source_title, start_node)
-        query_tokens = _tokenize(normalized_question)
+        normalized_question = normalize_question_template(question, source_title, start_node)
+        query_tokens = tokenize(normalized_question)
 
         candidate_query_patterns = self._infer_query_patterns(
             query_text=normalized_question,
@@ -286,7 +132,7 @@ class OfflineSGRAGRetriever:
             top_subgraphs=top_subgraphs,
         )
         grouped_triplets = tuple(subgraph.triplets for subgraph in deduped_subgraphs)
-        flat_triplets = self._flatten_unique(grouped_triplets)
+        flat_triplets = flatten_unique_triplets(grouped_triplets)
         candidate_patterns = tuple(pattern.relations for pattern in candidate_query_patterns)
 
         return SGRAGRetrievalResult(
@@ -453,7 +299,7 @@ class OfflineSGRAGRetriever:
         traversal_score: float,
     ) -> float:
         pattern_tokens = self._relation_pattern_tokens(relation_pattern)
-        relation_coverage = _weighted_overlap_score(query_tokens, pattern_tokens, self.text_idf)
+        relation_coverage = weighted_overlap_score(query_tokens, pattern_tokens, self.text_idf)
         phrase_bonus = self._relation_pattern_phrase_bonus(query_text, relation_pattern)
         return (traversal_score / max(len(relation_pattern), 1)) + (1.5 * relation_coverage) + phrase_bonus
 
@@ -472,8 +318,8 @@ class OfflineSGRAGRetriever:
             entity_tokens.extend(self.entity_tokens.get(head, ()))
             entity_tokens.extend(self.entity_tokens.get(tail, ()))
 
-        relation_score = _weighted_overlap_score(query_tokens, relation_tokens, self.text_idf)
-        entity_score = _weighted_overlap_score(query_tokens, entity_tokens, self.text_idf)
+        relation_score = weighted_overlap_score(query_tokens, relation_tokens, self.text_idf)
+        entity_score = weighted_overlap_score(query_tokens, entity_tokens, self.text_idf)
         return relation_score + (0.5 * entity_score)
 
     def _score_subgraph_record(
@@ -491,16 +337,16 @@ class OfflineSGRAGRetriever:
             entity_tokens.extend(self.entity_tokens.get(tail, ()))
             nodes.update((head, tail))
 
-        relation_coverage = _weighted_overlap_score(query_tokens, relation_tokens, self.text_idf)
-        entity_coverage = _weighted_overlap_score(query_tokens, entity_tokens, self.text_idf)
+        relation_coverage = weighted_overlap_score(query_tokens, relation_tokens, self.text_idf)
+        entity_coverage = weighted_overlap_score(query_tokens, entity_tokens, self.text_idf)
         connectivity_bonus = 0.05 * len(nodes)
         return (1.5 * relation_coverage) + (0.5 * entity_coverage) + connectivity_bonus
 
     def _score_triplet(self, triplet: Triplet, query_tokens: Sequence[str]) -> float:
         head, relation, tail = triplet
-        relation_score = _weighted_overlap_score(query_tokens, self.relation_tokens.get(relation, ()), self.text_idf)
-        head_score = _weighted_overlap_score(query_tokens, self.entity_tokens.get(head, ()), self.text_idf)
-        tail_score = _weighted_overlap_score(query_tokens, self.entity_tokens.get(tail, ()), self.text_idf)
+        relation_score = weighted_overlap_score(query_tokens, self.relation_tokens.get(relation, ()), self.text_idf)
+        head_score = weighted_overlap_score(query_tokens, self.entity_tokens.get(head, ()), self.text_idf)
+        tail_score = weighted_overlap_score(query_tokens, self.entity_tokens.get(tail, ()), self.text_idf)
         return (2.5 * relation_score) + (0.25 * head_score) + (0.75 * tail_score)
 
     def _relation_pattern_tokens(self, relation_pattern: Sequence[str]) -> Tuple[str, ...]:
@@ -510,7 +356,7 @@ class OfflineSGRAGRetriever:
         return tuple(tokens)
 
     def _relation_pattern_phrase_bonus(self, query_text: str, relation_pattern: Sequence[str]) -> float:
-        normalized_query = f" {_normalize_phrase(query_text)} "
+        normalized_query = f" {normalize_phrase(query_text)} "
         if normalized_query == "  ":
             return 0.0
 
@@ -523,7 +369,7 @@ class OfflineSGRAGRetriever:
 
             relation_bonus = 0.0
             for phrase in phrases:
-                normalized_phrase = _normalize_phrase(phrase)
+                normalized_phrase = normalize_phrase(phrase)
                 if not normalized_phrase:
                     continue
                 if f" {normalized_phrase} " not in normalized_query:
@@ -538,26 +384,7 @@ class OfflineSGRAGRetriever:
     @staticmethod
     def _materialize_subgraph_record(matched_triplets: Sequence[Triplet]) -> Tuple[Triplet, ...]:
         # Each record returned by executing a query pattern is a connected subgraph.
-        unique_triplets = []
-        seen = set()
-        for triplet in matched_triplets:
-            if triplet in seen:
-                continue
-            seen.add(triplet)
-            unique_triplets.append(triplet)
-        return tuple(unique_triplets)
-
-    @staticmethod
-    def _flatten_unique(grouped_triplets: Sequence[Sequence[Triplet]]) -> Tuple[Triplet, ...]:
-        flattened: List[Triplet] = []
-        seen = set()
-        for subgraph in grouped_triplets:
-            for triplet in subgraph:
-                if triplet in seen:
-                    continue
-                seen.add(triplet)
-                flattened.append(triplet)
-        return tuple(flattened)
+        return dedupe_preserve_order(matched_triplets)
 
     @staticmethod
     def _dedupe_and_rank_subgraphs(

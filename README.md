@@ -65,22 +65,29 @@ conda run -n llms python llm_kgqa.py \
   --dataset mquake_single \
   --hops n \
   --sampling-method sg_rag \
-  --sg-max-hop 5 \
+  --rag-max-hop 4 \
+  --rag-top-contexts 5 \
+  --rag-include-descriptions \
   --sg-top-query-patterns 1 \
-  --sg-top-subgraphs 5 \
-  --sg-include-descriptions \
   --llm-model qwen2.5 \
   --use-instruct
 ```
 
+Common RAG flags:
+
+- `--rag-max-hop <int>`: Sets the maximum hop count explored by the active RAG retriever.
+- `--rag-top-contexts <int>`: Sets how many retrieved context units are sent to the LLM.
+  For SG-RAG these are matched subgraphs; for PathRAG these are relational paths.
+- `--rag-max-branching <int>`: Controls graph traversal width.
+- `--rag-include-descriptions`: Appends entity/relation descriptions to the prompt as compact hints.
+
 Key SG-RAG flags:
 
 - `--sampling-method sg_rag`: Enables the offline SG-RAG retriever.
-- `--sg-max-hop <int>`: Sets the largest hop count SG-RAG will consider while inferring a path length without oracle hop access.
 - `--sg-top-query-patterns <int>`: Limits how many candidate query patterns are considered.
-- `--sg-top-subgraphs <int>`: Limits how many matched subgraph records are sent to the LLM.
-- `--sg-beam-width <int>` and `--sg-max-branching <int>`: Control graph traversal width.
-- `--sg-include-descriptions`: Appends entity/relation descriptions to the prompt as compact hints.
+- `--sg-beam-width <int>`: Controls SG-RAG query-pattern search width.
+
+The older SG-specific spellings for shared flags, such as `--sg-max-hop` and `--sg-top-subgraphs`, are still accepted as aliases.
 
 ### Running Offline PathRAG
 
@@ -100,12 +107,12 @@ conda run -n llms python llm_kgqa.py \
   --dataset mquake_single \
   --hops n \
   --sampling-method path_rag \
-  --path-max-hop 4 \
+  --rag-max-hop 4 \
+  --rag-top-contexts 8 \
+  --rag-include-descriptions \
   --path-top-nodes 8 \
-  --path-top-paths 8 \
   --path-alpha 0.8 \
   --path-threshold 0.3 \
-  --path-include-descriptions \
   --llm-model qwen2.5 \
   --use-instruct
 ```
@@ -114,11 +121,10 @@ Key PathRAG flags:
 
 - `--sampling-method path_rag`: Enables the offline PathRAG retriever.
 - `--path-top-nodes <int>`: Limits how many query-relevant nodes are retained before path retrieval.
-- `--path-top-paths <int>`: Limits how many relational paths are sent to the LLM.
-- `--path-max-hop <int>`: Sets the maximum path length explored.
 - `--path-alpha <float>` and `--path-threshold <float>`: Control the flow-based pruning stage.
-- `--path-max-paths-per-pair <int>` and `--path-max-branching <int>`: Bound candidate path enumeration for offline use.
-- `--path-include-descriptions`: Appends entity/relation descriptions to the prompt as compact hints.
+- `--path-max-paths-per-pair <int>`: Bounds candidate path enumeration for offline use.
+
+The older PathRAG-specific spellings for shared flags, such as `--path-max-hop` and `--path-top-paths`, are still accepted as aliases.
 
 ## Results
 Results are stored in the `results/` directory. Each result file is named based on the dataset, model, and experiment parameters.

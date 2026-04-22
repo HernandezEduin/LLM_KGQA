@@ -15,6 +15,8 @@ import warnings
 
 from model.LLM_KGQA import LLM_KGQA_Client
 from model.constants import valid_models
+from model.sg_rag import OfflineSGRAGRetriever
+from model.path_rag import OfflinePathRAGRetriever
 
 from utils.basic import load_triplets, load_pandas, extract_literals
 from utils.kgqa_utils import compare_answers, extract_final_answer
@@ -27,8 +29,6 @@ from utils.graph_utils import (
     random_subgraph_sampling_by_node,
     generate_multi_answer_paths_from_source
 )
-from utils.sg_rag_utils import OfflineSGRAGRetriever
-from utils.path_rag_utils import OfflinePathRAGRetriever
 
 from collections import defaultdict
 from typing import Dict
@@ -92,37 +92,31 @@ def parse_args():
     parser.add_argument('-r', '--retrieve', action='store_true',
                         help='Non-oracle subgraph retrieval method.')
 
+    # Common RAG retrieval parameters
+    parser.add_argument('--rag-top-contexts', type=int, default=8,
+        help='Maximum number of retrieved context units sent to the LLM (subgraphs for SG-RAG, paths for PathRAG). This is Top Subgraphs for SG-RAG and Top Paths for PathRAG.')
+    parser.add_argument('--rag-max-hop', type=int, default=None,
+        help='Maximum hop count explored by the active RAG retriever.')
+    parser.add_argument('--rag-max-branching', type=int, default=16,
+        help='Maximum number of candidate edges retained per expansion step in the active RAG retriever.')
+    parser.add_argument('--rag-include-descriptions', action='store_true', 
+        help='Append entity and relation descriptions for RAG-based prompts.')
+
     # SG-RAG retrieval parameters
     parser.add_argument('--sg-top-query-patterns', type=int, default=5,
                         help='Maximum number of candidate SG-RAG query patterns retained after offline search.')
-    parser.add_argument('--sg-top-subgraphs', type=int, default=8,
-                        help='Maximum number of matched subgraph records to keep for SG-RAG.')
-    parser.add_argument('--sg-max-hop', type=int, default=3,
-                        help='Maximum hop count considered by SG-RAG when it infers a path length without oracle hop access.')
     parser.add_argument('--sg-beam-width', type=int, default=24,
                         help='Beam width for SG-RAG path expansion.')
-    parser.add_argument('--sg-max-branching', type=int, default=16,
-                        help='Maximum number of candidate edges retained per expansion step in SG-RAG.')
-    parser.add_argument('--sg-include-descriptions', action='store_true',
-                        help='Append entity and relation descriptions for SG-RAG prompts.')
 
     # PathRAG retrieval parameters
     parser.add_argument('--path-top-nodes', type=int, default=8,
                         help='Maximum number of query-relevant nodes retained for PathRAG path retrieval.')
-    parser.add_argument('--path-top-paths', type=int, default=8,
-                        help='Maximum number of retrieved relational paths kept for PathRAG prompting.')
-    parser.add_argument('--path-max-hop', type=int, default=4,
-                        help='Maximum path length explored by PathRAG.')
     parser.add_argument('--path-alpha', type=float, default=0.8,
                         help='Decay rate for PathRAG flow-based pruning.')
     parser.add_argument('--path-threshold', type=float, default=0.3,
                         help='Early-stop pruning threshold for PathRAG flow propagation.')
     parser.add_argument('--path-max-paths-per-pair', type=int, default=32,
                         help='Maximum number of candidate paths enumerated for each retrieved node pair in PathRAG.')
-    parser.add_argument('--path-max-branching', type=int, default=16,
-                        help='Maximum number of outgoing edges expanded per step when PathRAG enumerates candidate paths.')
-    parser.add_argument('--path-include-descriptions', action='store_true',
-                        help='Append entity and relation descriptions for PathRAG prompts.')
     
     # Result parameters
     parser.add_argument('--result-dir', type=str, default='./results',
@@ -217,6 +211,9 @@ if __name__ == '__main__':
         warnings.warn(f"{args.sampling_method} is a retrieval method; enabling --retrieve.")
     if args.sampling_method in retrieval_methods:
         args.subgraph_size = None
+        if args.rag_max_hop is None:
+            warnings.warn(f"RAG max hop not specified; setting to default based on dataset.")
+            args.rag_max_hop = int(args.hops) if args.hops != 'n' else (4 if args.dataset == 'mquake' else 3)
 
     # Calculate minimum subgraph size based on batch size and hops
     if args.sampling_method not in {'evidence', *retrieval_methods} and args.subgraph_size is not None:
@@ -385,11 +382,11 @@ if __name__ == '__main__':
                     retrieval_result = sg_rag_retriever.retrieve(
                         question=question,
                         start_node=start_node,
-                        max_hops=args.sg_max_hop,
+                        max_hops=args.rag_max_hop,
                         top_query_patterns=args.sg_top_query_patterns,
-                        top_subgraphs=args.sg_top_subgraphs,
+                        top_subgraphs=args.rag_top_contexts,
                         beam_width=args.sg_beam_width,
-                        max_branching=args.sg_max_branching,
+                        max_branching=args.rag_max_branching,
                     )
                     candidate_query_patterns = retrieval_result.candidate_query_patterns
                     sub_graph = retrieval_result.flat_triplets
@@ -402,19 +399,19 @@ if __name__ == '__main__':
                         relation_title=relation_title,
                         entity_description=entity_description,
                         relation_description=relation_description,
-                        include_descriptions=args.sg_include_descriptions,
+                        include_descriptions=args.rag_include_descriptions,
                     )
                 elif args.sampling_method == 'path_rag':
                     retrieval_result = path_rag_retriever.retrieve(
                         question=question,
                         start_node=start_node,
-                        max_hops=args.path_max_hop,
+                        max_hops=args.rag_max_hop,
                         top_nodes=args.path_top_nodes,
-                        top_paths=args.path_top_paths,
+                        top_paths=args.rag_top_contexts,
                         alpha=args.path_alpha,
                         threshold=args.path_threshold,
                         max_paths_per_pair=args.path_max_paths_per_pair,
-                        max_branching=args.path_max_branching,
+                        max_branching=args.rag_max_branching,
                     )
                     retrieved_nodes = retrieval_result.retrieved_nodes
                     path_scores = retrieval_result.path_scores
@@ -428,7 +425,7 @@ if __name__ == '__main__':
                         relation_title=relation_title,
                         entity_description=entity_description,
                         relation_description=relation_description,
-                        include_descriptions=args.path_include_descriptions,
+                        include_descriptions=args.rag_include_descriptions,
                     )
                 else:
                     if args.retrieve: # non-oracle subgraph retrieval
@@ -542,9 +539,9 @@ if __name__ == '__main__':
             model_name += f"-q{args.quantization_bits}"
     subgraph_descriptor = args.subgraph_size
     if args.sampling_method == 'sg_rag':
-        subgraph_descriptor = f"sgsubgraphs{args.sg_top_subgraphs}"
+        subgraph_descriptor = f"sgsubgraphs{args.rag_top_contexts}"
     elif args.sampling_method == 'path_rag':
-        subgraph_descriptor = f"pathragpaths{args.path_top_paths}"
+        subgraph_descriptor = f"pathragpaths{args.rag_top_contexts}"
     results_file = os.path.join(result_path, f"results_{args.hops}hop_{model_name}_subgraph{subgraph_descriptor}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json")
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
