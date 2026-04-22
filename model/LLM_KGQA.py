@@ -9,7 +9,7 @@ from model.constants import valid_models, has_instruct_versions, has_quantized_v
 from utils.kgqa_utils import translate_path
 from utils.api_utils import list_models, chat, extract_model_ids, pick_model, load_api_config, register_cleanup_handlers, unload_model
 
-from typing import List, Tuple
+from typing import List, Sequence, Tuple
 
 # Durations: often in nanoseconds for Ollama-style stats
 def ns_to_s(x):
@@ -136,8 +136,7 @@ class LLM_KGQA_Client:
         template = (
             "You will be given a natural-language question, a starting node, and a set of knowledge-graph triplets.\n"
             "Answer the question using ONLY the information supported by the provided triplets.\n"
-            # "If the answer is not entailed by the triplets, reply exactly: UNKNOWN.\n\n"
-            "Each question contains a unique answer.\n"
+            "If multiple answers are supported by the triplets, return exactly one supported answer.\n"
             "Return only the final answer (no explanation, no reasoning, no extra text).\n"
             "Double-check the spelling of your answer.\n\n"
             f"Question: {question}\n"
@@ -146,6 +145,93 @@ class LLM_KGQA_Client:
             f"{triplets_str}\n\n"
         )
         return template, triplets_str
+
+    def prepare_grouped_prompt(
+            self,
+            question: str,
+            start_node: str,
+            grouped_triplets: Sequence[Sequence[Tuple[str, str, str]]],
+            entity_title: dict,
+            relation_title: dict,
+            entity_description: dict | None = None,
+            relation_description: dict | None = None,
+            include_descriptions: bool = False,
+        ) -> Tuple[str, str]:
+        """
+        Prepare a prompt for SG-RAG style grouped subgraphs.
+
+        Args:
+            question (str): The natural-language question.
+            start_node (str): The starting node for the subgraph.
+            grouped_triplets (Sequence[Sequence[Tuple[str, str, str]]]): Retrieved subgraph records where each inner
+                sequence contains the triplets of one matched subgraph.
+            entity_title (dict): Mapping of entity IDs to titles.
+            relation_title (dict): Mapping of relation IDs to titles.
+            entity_description (dict | None): Optional mapping of entity IDs to descriptions.
+            relation_description (dict | None): Optional mapping of relation IDs to descriptions.
+            include_descriptions (bool): Whether to append a compact metadata glossary.
+
+        Returns:
+            Tuple[str, str]: The prompt and the rendered grouped subgraph text.
+        """
+        entity_description = entity_description or {}
+        relation_description = relation_description or {}
+
+        start_node_str = entity_title.get(start_node, start_node)
+        rendered_subgraphs = []
+        used_entities = set()
+        used_relations = set()
+
+        for idx, subgraph in enumerate(grouped_triplets, start=1):
+            readable_triplets = translate_path(subgraph, entity_title, relation_title)
+            lines = [f"Subgraph {idx}:"]
+            for (head, relation, tail), (raw_head, raw_relation, raw_tail) in zip(readable_triplets, subgraph):
+                used_entities.update((raw_head, raw_tail))
+                used_relations.add(raw_relation)
+                lines.append(f"\t({head}, {relation}, {tail})")
+            rendered_subgraphs.append("\n".join(lines))
+
+        grouped_text = "\n\n".join(rendered_subgraphs) if rendered_subgraphs else "Subgraph 1:\n\t()"
+
+        glossary_sections = []
+        if include_descriptions:
+            entity_lines = []
+            for entity_id in sorted(used_entities, key=lambda value: entity_title.get(value, value)):
+                description = entity_description.get(entity_id, "")
+                if description:
+                    entity_lines.append(f"- {entity_title.get(entity_id, entity_id)}: {description}")
+
+            relation_lines = []
+            for relation_id in sorted(used_relations, key=lambda value: relation_title.get(value, value)):
+                description = relation_description.get(relation_id, "")
+                if description:
+                    relation_lines.append(f"- {relation_title.get(relation_id, relation_id)}: {description}")
+
+            if entity_lines:
+                glossary_sections.append("Entity Hints:\n" + "\n".join(entity_lines))
+            if relation_lines:
+                glossary_sections.append("Relation Hints:\n" + "\n".join(relation_lines))
+
+        glossary_text = "\n\n".join(glossary_sections)
+        if glossary_text:
+            glossary_text = "\n\n" + glossary_text
+
+        template = (
+            "You will be given a natural-language question, a starting node, and one or more retrieved "
+            "knowledge-graph subgraphs.\n"
+            "Each subgraph is written as ordered (subject, relation, object) triplets.\n"
+            "Use ONLY the retrieved subgraphs to answer the question.\n"
+            "If the answer is not supported by the retrieved subgraphs, reply exactly: UNKNOWN.\n"
+            "If multiple answers are supported by the retrieved subgraphs, return exactly one supported answer.\n"
+            "Return only the final answer (no explanation, no reasoning, no extra text).\n"
+            "Double-check the spelling of your answer.\n\n"
+            f"Question: {question}\n"
+            f"Starting Node: {start_node_str}\n"
+            "Retrieved Subgraphs:\n"
+            f"{grouped_text}"
+            f"{glossary_text}\n\n"
+        )
+        return template, grouped_text + glossary_text
 
     def _fetch_models(self):
         """
@@ -232,6 +318,48 @@ class LLM_KGQA_Client:
         if type(out) != dict or "message" not in out or "content" not in out["message"]:
             return "UNKNOWN", triplets_str, status_info
         return out["message"]["content"], triplets_str, status_info
+
+    def process_question_grouped(
+        self,
+        question: str,
+        start_node: str,
+        grouped_triplets: Sequence[Sequence[Tuple[str, str, str]]],
+        entity_title: dict,
+        relation_title: dict,
+        entity_description: dict | None = None,
+        relation_description: dict | None = None,
+        include_descriptions: bool = False,
+    ) -> str:
+        """
+        Process a question using SG-RAG style grouped subgraphs.
+        """
+        template, grouped_text = self.prepare_grouped_prompt(
+            question=question,
+            start_node=start_node,
+            grouped_triplets=grouped_triplets,
+            entity_title=entity_title,
+            relation_title=relation_title,
+            entity_description=entity_description,
+            relation_description=relation_description,
+            include_descriptions=include_descriptions,
+        )
+        out, status_info = self.chat(user_text=template)
+        status_info.update(self.normalize_usage(out))
+
+        if self.debug and status_info["status"] != "success":
+            print(f"LLM response status: {status_info['status']}, message: {status_info.get('message', '')}")
+
+        if status_info["status"] == "timeout":
+            return "TIMEOUT", grouped_text, status_info
+        elif status_info["status"] != "success":
+            return "ERROR", grouped_text, status_info
+
+        if out is None:
+            return "UNKNOWN", grouped_text, status_info
+
+        if type(out) != dict or "message" not in out or "content" not in out["message"]:
+            return "UNKNOWN", grouped_text, status_info
+        return out["message"]["content"], grouped_text, status_info
 
     def normalize_usage(self, raw: dict) -> dict:
         """

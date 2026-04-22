@@ -27,6 +27,7 @@ from utils.graph_utils import (
     random_subgraph_sampling_by_node,
     generate_multi_answer_paths_from_source
 )
+from utils.sg_rag_utils import OfflineSGRAGRetriever
 
 from collections import defaultdict
 from typing import Dict
@@ -50,6 +51,8 @@ def parse_args():
                         help='Number of hops for subgraph extraction.')
     parser.add_argument('--batch-size', type=int, default=16,
                         help='Number of questions to process in a batch.')
+    parser.add_argument('--use-dev', action='store_true',
+                        help='Whether to use the dev split instead of test split.')
 
     # LLM parameters
     parser.add_argument('--llm-model', type=str, default='gemma3',
@@ -72,7 +75,7 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for sampling.')
     parser.add_argument('--sampling-method', type=str, default='neighborhood',
-                        choices=['random', 'neighborhood', 'evidence'],
+                        choices=['random', 'neighborhood', 'evidence', 'sg_rag'],
                         help='Method for subgraph sampling.')
     parser.add_argument('--subgraph-size', type=int, default=50,
                         help='Number of triplets in the extracted subgraph.')
@@ -87,6 +90,20 @@ def parse_args():
     # retrieval
     parser.add_argument('-r', '--retrieve', action='store_true',
                         help='Non-oracle subgraph retrieval method.')
+
+    # SG-RAG retrieval parameters
+    parser.add_argument('--sg-top-query-patterns', type=int, default=5,
+                        help='Maximum number of candidate SG-RAG query patterns retained after offline search.')
+    parser.add_argument('--sg-top-subgraphs', type=int, default=8,
+                        help='Maximum number of matched subgraph records to keep for SG-RAG.')
+    parser.add_argument('--sg-max-hop', type=int, default=3,
+                        help='Maximum hop count considered by SG-RAG when it infers a path length without oracle hop access.')
+    parser.add_argument('--sg-beam-width', type=int, default=24,
+                        help='Beam width for SG-RAG path expansion.')
+    parser.add_argument('--sg-max-branching', type=int, default=16,
+                        help='Maximum number of candidate edges retained per expansion step in SG-RAG.')
+    parser.add_argument('--sg-include-descriptions', action='store_true',
+                        help='Append entity and relation descriptions for SG-RAG prompts.')
     
     # Result parameters
     parser.add_argument('--result-dir', type=str, default='./results',
@@ -175,8 +192,14 @@ if __name__ == '__main__':
         args.batch_size = 1
         warnings.warn("Using evidence paths only; overriding subgraph sampling parameters.")
 
+    if args.sampling_method == 'sg_rag' and not args.retrieve:
+        args.retrieve = True
+        warnings.warn("SG-RAG is a retrieval method; enabling --retrieve.")
+    if args.sampling_method == 'sg_rag':
+        args.subgraph_size = None
+
     # Calculate minimum subgraph size based on batch size and hops
-    if args.sampling_method != 'evidence' and args.subgraph_size is not None:
+    if args.sampling_method not in {'evidence', 'sg_rag'} and args.subgraph_size is not None:
         max_hops = int(args.hops) if args.hops != 'n' else (4 if args.dataset == 'mquake' else 3)
         graph_min_size = args.batch_size * max_hops
         if args.subgraph_size < graph_min_size:
@@ -191,23 +214,36 @@ if __name__ == '__main__':
     relation_file = os.path.join(data_dir, 'relation_data.csv')
 
     # Load entity and relation mappings
-    entity_df = load_pandas(entity_file)
-    relation_df = load_pandas(relation_file)
+    entity_df_raw = load_pandas(entity_file)
+    relation_df_raw = load_pandas(relation_file)
+
+    entity_df = entity_df_raw.copy()
+    relation_df = relation_df_raw.copy()
 
     entity_df.set_index('QID', inplace=True)
     relation_df.set_index('Property', inplace=True)
 
     entity_title = entity_df['Title'].to_dict()
+    entity_description = entity_df['Description'].to_dict()
     relation_title = relation_df['Title'].to_dict()
+    relation_description = relation_df['Description'].to_dict()
 
     # Load all triplets and build indices
     all_triplets = load_triplets(triplet_file)
     all_triplets = set(tuple(triplet) for triplet in all_triplets.values)
     incidence, neighbors = build_incidence_index(all_triplets)
 
+    sg_rag_retriever = None
+    if args.sampling_method == 'sg_rag':
+        sg_rag_retriever = OfflineSGRAGRetriever(
+            triplets=all_triplets,
+            entity_df=entity_df_raw,
+            relation_df=relation_df_raw,
+        )
+
     # Load QA dataset
     qa_df = load_pandas(qa_file)
-    qa_df = qa_df[qa_df['SplitLabel'] == 'test']
+    qa_df = qa_df[qa_df['SplitLabel'] == 'test'] if not args.use_dev else qa_df[qa_df['SplitLabel'] == 'dev']
 
     is_multi_answer = False
     # check if answers are lists (multi-answer) or single values, and adjust accordingly
@@ -216,26 +252,27 @@ if __name__ == '__main__':
         qa_df['Answer-Entity'] = extract_literals(qa_df["Answer-Entity"])
         is_multi_answer = True
 
-    # Extract triplets from paths
+    # Extract triplets from paths when an oracle/evidence method needs them
     is_multi_path = False
-    if "Paths" in qa_df.columns:
-        qa_df['Paths'] = extract_literals(qa_df["Paths"])
-    elif "Path-Key" in qa_df.columns:
-        relation_index = build_relation_index(all_triplets) # build relation index for evidence-based sampling
-        qa_df['Path-Key'] = qa_df['Path-Key'].apply(lambda x: x.split('->')) # split the path keys into lists
-        
-        qa_df['Paths'] = qa_df.apply(lambda row: generate_multi_answer_paths_from_source(
-            source_entity=row['Source-Entity'],
-            rel_list=row['Path-Key'],
-            relation_index=relation_index
-        ), axis=1)
+    if args.sampling_method != 'sg_rag':
+        if "Paths" in qa_df.columns:
+            qa_df['Paths'] = extract_literals(qa_df["Paths"])
+        elif "Path-Key" in qa_df.columns:
+            relation_index = build_relation_index(all_triplets) # build relation index for evidence-based sampling
+            qa_df['Path-Key'] = qa_df['Path-Key'].apply(lambda x: x.split('->')) # split the path keys into lists
+            
+            qa_df['Paths'] = qa_df.apply(lambda row: generate_multi_answer_paths_from_source(
+                source_entity=row['Source-Entity'],
+                rel_list=row['Path-Key'],
+                relation_index=relation_index
+            ), axis=1)
 
-        # print(qa_df['Path-Key'].head(5))
-        # print(qa_df['Paths'].head(5))
-        # print(qa_df['Paths'].apply(len).head(5))
-        is_multi_path = True
-    else:
-        raise ValueError("QA dataframe must contain either 'Paths' or 'Path-Key' column for evidence paths.")
+            # print(qa_df['Path-Key'].head(5))
+            # print(qa_df['Paths'].head(5))
+            # print(qa_df['Paths'].apply(len).head(5))
+            is_multi_path = True
+        else:
+            raise ValueError("QA dataframe must contain either 'Paths' or 'Path-Key' column for evidence paths.")
     
 
     # prepare client
@@ -269,11 +306,12 @@ if __name__ == '__main__':
     with tqdm(range(0, total_batches), desc="Processing Batches") as pbar:
         for i0 in pbar:
             qa_batch = qa_df[i0*args.batch_size:(i0+1)*args.batch_size]         # return the last smaller batch as is, even if size < batch_size
-            qa_path_batch = qa_batch['Paths']
-            if is_multi_path:
-                path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode().explode())
-            else:
-                path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode())
+            if args.sampling_method != 'sg_rag':
+                qa_path_batch = qa_batch['Paths']
+                if is_multi_path:
+                    path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode().explode())
+                else:
+                    path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode())
 
             # Subgraph Sampling
             """
@@ -282,7 +320,7 @@ if __name__ == '__main__':
             - Random Sampling: Selects random triplets from the graph (includes evidence paths).
             - Evidence-Based Sampling: Uses predefined evidence paths.
             """
-            if not args.retrieve: # oracle subgraph
+            if args.sampling_method != 'sg_rag' and not args.retrieve: # oracle subgraph
                 if args.sampling_method == 'neighborhood':
                     sub_graph = neighborhood_subgraph_sampling(
                         full_graph=all_triplets,
@@ -312,40 +350,65 @@ if __name__ == '__main__':
                 start_node = qa_batch['Source-Entity'].iloc[i1]
                 answer = extract_final_answer(qa_batch['Answer'].iloc[i1], lower=True)
                 hop = qa_batch['Hops'].iloc[i1]
+                candidate_query_patterns = ()
 
-                if args.retrieve: # non-oracle subgraph retrieval
-                    if args.sampling_method == 'neighborhood':
-                        sub_graph = neighborhood_subgraph_sampling_by_node(
-                            full_graph=all_triplets,
-                            start_node=start_node,
-                            incidence=incidence,
-                            neighbors=neighbors,
-                            target_size=args.subgraph_size,
-                            max_depth=args.max_depth,
-                            rng_seed=args.seed + i1,
-                            fill_random_if_needed=True,
-                        )
-                    elif args.sampling_method == 'random':
-                        sub_graph = random_subgraph_sampling_by_node(
-                            full_graph=all_triplets, 
-                            start_node=start_node, 
-                            target_size=args.subgraph_size,
-                            rng_seed=args.seed + i1
-                        )
-                    elif args.sampling_method == 'evidence':
-                        raise ValueError("Retrieval cannot use evidence.")
-                    else:
-                        raise ValueError(f"Unknown sampling method: {args.sampling_method}")
+                if args.sampling_method == 'sg_rag':
+                    retrieval_result = sg_rag_retriever.retrieve(
+                        question=question,
+                        start_node=start_node,
+                        max_hops=args.sg_max_hop,
+                        top_query_patterns=args.sg_top_query_patterns,
+                        top_subgraphs=args.sg_top_subgraphs,
+                        beam_width=args.sg_beam_width,
+                        max_branching=args.sg_max_branching,
+                    )
+                    candidate_query_patterns = retrieval_result.candidate_query_patterns
+                    sub_graph = retrieval_result.flat_triplets
 
-                pred, sub_graph_txt, status_info = client.process_question(
-                    question,
-                    start_node, 
-                    sub_graph,
-                    entity_title, 
-                    relation_title, 
-                    args.seed + i0, 
-                    sort_graph=not args.evidence_only
-                )
+                    pred, sub_graph_txt, status_info = client.process_question_grouped(
+                        question=question,
+                        start_node=start_node,
+                        grouped_triplets=retrieval_result.grouped_triplets,
+                        entity_title=entity_title,
+                        relation_title=relation_title,
+                        entity_description=entity_description,
+                        relation_description=relation_description,
+                        include_descriptions=args.sg_include_descriptions,
+                    )
+                else:
+                    if args.retrieve: # non-oracle subgraph retrieval
+                        if args.sampling_method == 'neighborhood':
+                            sub_graph = neighborhood_subgraph_sampling_by_node(
+                                full_graph=all_triplets,
+                                start_node=start_node,
+                                incidence=incidence,
+                                neighbors=neighbors,
+                                target_size=args.subgraph_size,
+                                max_depth=args.max_depth,
+                                rng_seed=args.seed + i1,
+                                fill_random_if_needed=True,
+                            )
+                        elif args.sampling_method == 'random':
+                            sub_graph = random_subgraph_sampling_by_node(
+                                full_graph=all_triplets, 
+                                start_node=start_node, 
+                                target_size=args.subgraph_size,
+                                rng_seed=args.seed + i1
+                            )
+                        elif args.sampling_method == 'evidence':
+                            raise ValueError("Retrieval cannot use evidence.")
+                        else:
+                            raise ValueError(f"Unknown sampling method: {args.sampling_method}")
+
+                    pred, sub_graph_txt, status_info = client.process_question(
+                        question,
+                        start_node, 
+                        sub_graph,
+                        entity_title, 
+                        relation_title, 
+                        args.seed + i0, 
+                        sort_graph=not args.evidence_only
+                    )
                 # create a copy of the full prediction before extracting final answer
                 full_pred = pred
                 pred = extract_final_answer(pred, lower=False)
@@ -383,6 +446,8 @@ if __name__ == '__main__':
                     pbar.write(f"Subgraph Text: {sub_graph_txt}")
                     pbar.write(f"Subgraph size: {len(sub_graph)} triplets")
                     pbar.write(f"Subgraph sampling method: {'retrieve' if args.retrieve else 'oracle'}, {args.sampling_method}")
+                    if candidate_query_patterns:
+                        pbar.write(f"Candidate query patterns: {list(candidate_query_patterns)}")
                     pbar.write(f"Correct: {compare_answers(pred.lower(), answer)}")
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
@@ -416,7 +481,10 @@ if __name__ == '__main__':
         model_name += "-instruct"
         if args.use_quantized:
             model_name += f"-q{args.quantization_bits}"
-    results_file = os.path.join(result_path, f"results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json")
+    subgraph_descriptor = args.subgraph_size
+    if args.sampling_method == 'sg_rag':
+        subgraph_descriptor = f"sgsubgraphs{args.sg_top_subgraphs}"
+    results_file = os.path.join(result_path, f"results_{args.hops}hop_{model_name}_subgraph{subgraph_descriptor}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json")
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
         print(f"Results saved to {results_file}")
