@@ -82,6 +82,44 @@ Key SG-RAG flags:
 - `--sg-beam-width <int>` and `--sg-max-branching <int>`: Control graph traversal width.
 - `--sg-include-descriptions`: Appends entity/relation descriptions to the prompt as compact hints.
 
+### Running Offline PathRAG
+
+The repo also includes an offline PathRAG-style retriever for multi-hop KGQA. It follows the core PathRAG idea:
+
+- retrieve query-relevant nodes from KG metadata
+- find key relational paths between those nodes
+- prune and rank paths with a flow-based reliability score
+- place retrieved paths in the prompt from lower to higher reliability, with the best paths last
+
+Because this repo uses an offline symbolic KG rather than a text-indexed graph with embeddings, the node retrieval stage is approximated with overlap over entity and relation labels/descriptions.
+
+Example:
+
+```bash
+conda run -n llms python llm_kgqa.py \
+  --dataset mquake_single \
+  --hops n \
+  --sampling-method path_rag \
+  --path-max-hop 4 \
+  --path-top-nodes 8 \
+  --path-top-paths 8 \
+  --path-alpha 0.8 \
+  --path-threshold 0.3 \
+  --path-include-descriptions \
+  --llm-model qwen2.5 \
+  --use-instruct
+```
+
+Key PathRAG flags:
+
+- `--sampling-method path_rag`: Enables the offline PathRAG retriever.
+- `--path-top-nodes <int>`: Limits how many query-relevant nodes are retained before path retrieval.
+- `--path-top-paths <int>`: Limits how many relational paths are sent to the LLM.
+- `--path-max-hop <int>`: Sets the maximum path length explored.
+- `--path-alpha <float>` and `--path-threshold <float>`: Control the flow-based pruning stage.
+- `--path-max-paths-per-pair <int>` and `--path-max-branching <int>`: Bound candidate path enumeration for offline use.
+- `--path-include-descriptions`: Appends entity/relation descriptions to the prompt as compact hints.
+
 ## Results
 Results are stored in the `results/` directory. Each result file is named based on the dataset, model, and experiment parameters.
 

@@ -28,6 +28,7 @@ from utils.graph_utils import (
     generate_multi_answer_paths_from_source
 )
 from utils.sg_rag_utils import OfflineSGRAGRetriever
+from utils.path_rag_utils import OfflinePathRAGRetriever
 
 from collections import defaultdict
 from typing import Dict
@@ -75,7 +76,7 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for sampling.')
     parser.add_argument('--sampling-method', type=str, default='neighborhood',
-                        choices=['random', 'neighborhood', 'evidence', 'sg_rag'],
+                        choices=['random', 'neighborhood', 'evidence', 'sg_rag', 'path_rag'],
                         help='Method for subgraph sampling.')
     parser.add_argument('--subgraph-size', type=int, default=50,
                         help='Number of triplets in the extracted subgraph.')
@@ -104,6 +105,24 @@ def parse_args():
                         help='Maximum number of candidate edges retained per expansion step in SG-RAG.')
     parser.add_argument('--sg-include-descriptions', action='store_true',
                         help='Append entity and relation descriptions for SG-RAG prompts.')
+
+    # PathRAG retrieval parameters
+    parser.add_argument('--path-top-nodes', type=int, default=8,
+                        help='Maximum number of query-relevant nodes retained for PathRAG path retrieval.')
+    parser.add_argument('--path-top-paths', type=int, default=8,
+                        help='Maximum number of retrieved relational paths kept for PathRAG prompting.')
+    parser.add_argument('--path-max-hop', type=int, default=4,
+                        help='Maximum path length explored by PathRAG.')
+    parser.add_argument('--path-alpha', type=float, default=0.8,
+                        help='Decay rate for PathRAG flow-based pruning.')
+    parser.add_argument('--path-threshold', type=float, default=0.3,
+                        help='Early-stop pruning threshold for PathRAG flow propagation.')
+    parser.add_argument('--path-max-paths-per-pair', type=int, default=32,
+                        help='Maximum number of candidate paths enumerated for each retrieved node pair in PathRAG.')
+    parser.add_argument('--path-max-branching', type=int, default=16,
+                        help='Maximum number of outgoing edges expanded per step when PathRAG enumerates candidate paths.')
+    parser.add_argument('--path-include-descriptions', action='store_true',
+                        help='Append entity and relation descriptions for PathRAG prompts.')
     
     # Result parameters
     parser.add_argument('--result-dir', type=str, default='./results',
@@ -185,6 +204,7 @@ def avg_dict(vals: Dict[str, object]) -> Dict[str, float]:
 
 if __name__ == '__main__':
     args = parse_args()
+    retrieval_methods = {'sg_rag', 'path_rag'}
 
     if args.evidence_only:
         args.subgraph_size = None
@@ -192,14 +212,14 @@ if __name__ == '__main__':
         args.batch_size = 1
         warnings.warn("Using evidence paths only; overriding subgraph sampling parameters.")
 
-    if args.sampling_method == 'sg_rag' and not args.retrieve:
+    if args.sampling_method in retrieval_methods and not args.retrieve:
         args.retrieve = True
-        warnings.warn("SG-RAG is a retrieval method; enabling --retrieve.")
-    if args.sampling_method == 'sg_rag':
+        warnings.warn(f"{args.sampling_method} is a retrieval method; enabling --retrieve.")
+    if args.sampling_method in retrieval_methods:
         args.subgraph_size = None
 
     # Calculate minimum subgraph size based on batch size and hops
-    if args.sampling_method not in {'evidence', 'sg_rag'} and args.subgraph_size is not None:
+    if args.sampling_method not in {'evidence', *retrieval_methods} and args.subgraph_size is not None:
         max_hops = int(args.hops) if args.hops != 'n' else (4 if args.dataset == 'mquake' else 3)
         graph_min_size = args.batch_size * max_hops
         if args.subgraph_size < graph_min_size:
@@ -240,6 +260,13 @@ if __name__ == '__main__':
             entity_df=entity_df_raw,
             relation_df=relation_df_raw,
         )
+    path_rag_retriever = None
+    if args.sampling_method == 'path_rag':
+        path_rag_retriever = OfflinePathRAGRetriever(
+            triplets=all_triplets,
+            entity_df=entity_df_raw,
+            relation_df=relation_df_raw,
+        )
 
     # Load QA dataset
     qa_df = load_pandas(qa_file)
@@ -254,7 +281,7 @@ if __name__ == '__main__':
 
     # Extract triplets from paths when an oracle/evidence method needs them
     is_multi_path = False
-    if args.sampling_method != 'sg_rag':
+    if args.sampling_method not in retrieval_methods:
         if "Paths" in qa_df.columns:
             qa_df['Paths'] = extract_literals(qa_df["Paths"])
         elif "Path-Key" in qa_df.columns:
@@ -306,7 +333,7 @@ if __name__ == '__main__':
     with tqdm(range(0, total_batches), desc="Processing Batches") as pbar:
         for i0 in pbar:
             qa_batch = qa_df[i0*args.batch_size:(i0+1)*args.batch_size]         # return the last smaller batch as is, even if size < batch_size
-            if args.sampling_method != 'sg_rag':
+            if args.sampling_method not in retrieval_methods:
                 qa_path_batch = qa_batch['Paths']
                 if is_multi_path:
                     path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode().explode())
@@ -320,7 +347,7 @@ if __name__ == '__main__':
             - Random Sampling: Selects random triplets from the graph (includes evidence paths).
             - Evidence-Based Sampling: Uses predefined evidence paths.
             """
-            if args.sampling_method != 'sg_rag' and not args.retrieve: # oracle subgraph
+            if args.sampling_method not in retrieval_methods and not args.retrieve: # oracle subgraph
                 if args.sampling_method == 'neighborhood':
                     sub_graph = neighborhood_subgraph_sampling(
                         full_graph=all_triplets,
@@ -351,6 +378,8 @@ if __name__ == '__main__':
                 answer = extract_final_answer(qa_batch['Answer'].iloc[i1], lower=True)
                 hop = qa_batch['Hops'].iloc[i1]
                 candidate_query_patterns = ()
+                retrieved_nodes = ()
+                path_scores = ()
 
                 if args.sampling_method == 'sg_rag':
                     retrieval_result = sg_rag_retriever.retrieve(
@@ -374,6 +403,32 @@ if __name__ == '__main__':
                         entity_description=entity_description,
                         relation_description=relation_description,
                         include_descriptions=args.sg_include_descriptions,
+                    )
+                elif args.sampling_method == 'path_rag':
+                    retrieval_result = path_rag_retriever.retrieve(
+                        question=question,
+                        start_node=start_node,
+                        max_hops=args.path_max_hop,
+                        top_nodes=args.path_top_nodes,
+                        top_paths=args.path_top_paths,
+                        alpha=args.path_alpha,
+                        threshold=args.path_threshold,
+                        max_paths_per_pair=args.path_max_paths_per_pair,
+                        max_branching=args.path_max_branching,
+                    )
+                    retrieved_nodes = retrieval_result.retrieved_nodes
+                    path_scores = retrieval_result.path_scores
+                    sub_graph = retrieval_result.flat_triplets
+
+                    pred, sub_graph_txt, status_info = client.process_question_paths(
+                        question=question,
+                        start_node=start_node,
+                        grouped_triplets=retrieval_result.grouped_triplets,
+                        entity_title=entity_title,
+                        relation_title=relation_title,
+                        entity_description=entity_description,
+                        relation_description=relation_description,
+                        include_descriptions=args.path_include_descriptions,
                     )
                 else:
                     if args.retrieve: # non-oracle subgraph retrieval
@@ -448,6 +503,10 @@ if __name__ == '__main__':
                     pbar.write(f"Subgraph sampling method: {'retrieve' if args.retrieve else 'oracle'}, {args.sampling_method}")
                     if candidate_query_patterns:
                         pbar.write(f"Candidate query patterns: {list(candidate_query_patterns)}")
+                    if retrieved_nodes:
+                        pbar.write(f"Retrieved nodes: {list(retrieved_nodes)}")
+                    if path_scores:
+                        pbar.write(f"Path scores: {[round(score, 4) for score in path_scores]}")
                     pbar.write(f"Correct: {compare_answers(pred.lower(), answer)}")
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
@@ -484,6 +543,8 @@ if __name__ == '__main__':
     subgraph_descriptor = args.subgraph_size
     if args.sampling_method == 'sg_rag':
         subgraph_descriptor = f"sgsubgraphs{args.sg_top_subgraphs}"
+    elif args.sampling_method == 'path_rag':
+        subgraph_descriptor = f"pathragpaths{args.path_top_paths}"
     results_file = os.path.join(result_path, f"results_{args.hops}hop_{model_name}_subgraph{subgraph_descriptor}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json")
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)

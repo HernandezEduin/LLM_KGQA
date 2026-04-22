@@ -233,6 +233,95 @@ class LLM_KGQA_Client:
         )
         return template, grouped_text + glossary_text
 
+    def prepare_path_prompt(
+            self,
+            question: str,
+            start_node: str,
+            grouped_triplets: Sequence[Sequence[Tuple[str, str, str]]],
+            entity_title: dict,
+            relation_title: dict,
+            entity_description: dict | None = None,
+            relation_description: dict | None = None,
+            include_descriptions: bool = False,
+        ) -> Tuple[str, str]:
+        """
+        Prepare a prompt for PathRAG style retrieved relational paths.
+
+        Args:
+            question (str): The natural-language question.
+            start_node (str): The starting node for the query.
+            grouped_triplets (Sequence[Sequence[Tuple[str, str, str]]]): Retrieved paths where each inner
+                sequence contains the triplets of one relational path.
+            entity_title (dict): Mapping of entity IDs to titles.
+            relation_title (dict): Mapping of relation IDs to titles.
+            entity_description (dict | None): Optional mapping of entity IDs to descriptions.
+            relation_description (dict | None): Optional mapping of relation IDs to descriptions.
+            include_descriptions (bool): Whether to append a compact metadata glossary.
+
+        Returns:
+            Tuple[str, str]: The prompt and rendered path text.
+        """
+        entity_description = entity_description or {}
+        relation_description = relation_description or {}
+
+        start_node_str = entity_title.get(start_node, start_node)
+        rendered_paths = []
+        used_entities = set()
+        used_relations = set()
+
+        for idx, path_triplets in enumerate(grouped_triplets, start=1):
+            readable_triplets = translate_path(path_triplets, entity_title, relation_title)
+            lines = [f"Path {idx}:"]
+            for (head, relation, tail), (raw_head, raw_relation, raw_tail) in zip(readable_triplets, path_triplets):
+                used_entities.update((raw_head, raw_tail))
+                used_relations.add(raw_relation)
+                lines.append(f"\t({head}, {relation}, {tail})")
+            rendered_paths.append("\n".join(lines))
+
+        rendered_text = "\n\n".join(rendered_paths) if rendered_paths else "Path 1:\n\t()"
+
+        glossary_sections = []
+        if include_descriptions:
+            entity_lines = []
+            for entity_id in sorted(used_entities, key=lambda value: entity_title.get(value, value)):
+                description = entity_description.get(entity_id, "")
+                if description:
+                    entity_lines.append(f"- {entity_title.get(entity_id, entity_id)}: {description}")
+
+            relation_lines = []
+            for relation_id in sorted(used_relations, key=lambda value: relation_title.get(value, value)):
+                description = relation_description.get(relation_id, "")
+                if description:
+                    relation_lines.append(f"- {relation_title.get(relation_id, relation_id)}: {description}")
+
+            if entity_lines:
+                glossary_sections.append("Entity Hints:\n" + "\n".join(entity_lines))
+            if relation_lines:
+                glossary_sections.append("Relation Hints:\n" + "\n".join(relation_lines))
+
+        glossary_text = "\n\n".join(glossary_sections)
+        if glossary_text:
+            glossary_text = "\n\n" + glossary_text
+
+        template = (
+            "You will be given a natural-language question, a starting node, and one or more retrieved "
+            "relational paths from a knowledge graph.\n"
+            "Each path is written as an ordered sequence of (subject, relation, object) triplets.\n"
+            "The paths are ordered from lower to higher retrieval reliability, so later paths are usually "
+            "more reliable.\n"
+            "Use ONLY the retrieved paths to answer the question.\n"
+            "If the answer is not supported by the retrieved paths, reply exactly: UNKNOWN.\n"
+            "If multiple answers are supported by the retrieved paths, return exactly one supported answer.\n"
+            "Return only the final answer (no explanation, no reasoning, no extra text).\n"
+            "Double-check the spelling of your answer.\n\n"
+            f"Question: {question}\n"
+            f"Starting Node: {start_node_str}\n"
+            "Retrieved Paths:\n"
+            f"{rendered_text}"
+            f"{glossary_text}\n\n"
+        )
+        return template, rendered_text + glossary_text
+
     def _fetch_models(self):
         """
         Fetch the list of available models from the API.
@@ -360,6 +449,48 @@ class LLM_KGQA_Client:
         if type(out) != dict or "message" not in out or "content" not in out["message"]:
             return "UNKNOWN", grouped_text, status_info
         return out["message"]["content"], grouped_text, status_info
+
+    def process_question_paths(
+        self,
+        question: str,
+        start_node: str,
+        grouped_triplets: Sequence[Sequence[Tuple[str, str, str]]],
+        entity_title: dict,
+        relation_title: dict,
+        entity_description: dict | None = None,
+        relation_description: dict | None = None,
+        include_descriptions: bool = False,
+    ) -> str:
+        """
+        Process a question using PathRAG style retrieved paths.
+        """
+        template, rendered_text = self.prepare_path_prompt(
+            question=question,
+            start_node=start_node,
+            grouped_triplets=grouped_triplets,
+            entity_title=entity_title,
+            relation_title=relation_title,
+            entity_description=entity_description,
+            relation_description=relation_description,
+            include_descriptions=include_descriptions,
+        )
+        out, status_info = self.chat(user_text=template)
+        status_info.update(self.normalize_usage(out))
+
+        if self.debug and status_info["status"] != "success":
+            print(f"LLM response status: {status_info['status']}, message: {status_info.get('message', '')}")
+
+        if status_info["status"] == "timeout":
+            return "TIMEOUT", rendered_text, status_info
+        elif status_info["status"] != "success":
+            return "ERROR", rendered_text, status_info
+
+        if out is None:
+            return "UNKNOWN", rendered_text, status_info
+
+        if type(out) != dict or "message" not in out or "content" not in out["message"]:
+            return "UNKNOWN", rendered_text, status_info
+        return out["message"]["content"], rendered_text, status_info
 
     def normalize_usage(self, raw: dict) -> dict:
         """
