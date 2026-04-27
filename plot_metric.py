@@ -23,7 +23,7 @@ def parse_args():
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed used in the experiments.')
     
-    parser.add_argument('--subgraph-size', type=int, nargs='+', default=[None, 5, 10, 50, 100, 250, 500, 700, 1000, 1500, 1700, 2000, 2500],
+    parser.add_argument('--subgraph-size', type=int, nargs='+', default=[None, 5, 10, 250, 500, 1000, 2000, 3000],
                         help='Number of triplets in the extracted subgraph.')
     
     parser.add_argument('--sampling-method', type=str, default='neighborhood',
@@ -75,7 +75,7 @@ if __name__ == "__main__":
             sampling_str = args.sampling_method if size is not None else 'evidence'
             results_file = os.path.join(
                 result_path,
-                f"results_{args.hops}hop_{model_name}_subgraph{size}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json"
+                f"results_{args.hops}hop_{model_name}_subgraph{size}_{'retrieve' if args.retrieve else 'oracle'}_{sampling_str}_seed{args.seed}.json"
             )
             if os.path.exists(results_file):
                 with open(results_file, 'r') as f:
