@@ -1,4 +1,6 @@
 import atexit
+import json
+import re
 import signal
 
 from pathlib import Path
@@ -146,6 +148,199 @@ class LLM_KGQA_Client:
             f"{triplets_str}\n\n"
         )
         return template, triplets_str
+
+    def prepare_navigation_prompt(
+        self,
+        question: str,
+        current_entity: str,
+        history: List[Tuple[str, str, str]],
+        actions: List[Tuple[str, str, str]],
+        entity_title: dict,
+        relation_title: dict,
+    ) -> Tuple[str, str]:
+        """Build one graph-navigation prompt from controller-owned state."""
+        current_entity_str = entity_title.get(current_entity, current_entity)
+        readable_history = translate_path(history, entity_title, relation_title)
+        if readable_history:
+            history_str = "\n".join(
+                f"  {index}. ({head}, {relation}, {tail})"
+                for index, (head, relation, tail) in enumerate(readable_history)
+            )
+        else:
+            history_str = "  (none)"
+
+        action_lines = []
+        for action_id, (_, relation, tail) in enumerate(actions):
+            relation_str = relation_title.get(relation, relation)
+            tail_str = entity_title.get(tail, tail)
+            action_lines.append(
+                f"  {action_id}. --{relation_str} ({relation})--> {tail_str} ({tail})"
+            )
+        action_lines.append("  STOP. Stop navigating and provide the final answer")
+        actions_str = "\n".join(action_lines)
+
+        template = (
+            "Navigate the knowledge graph to answer the question.\n"
+            "Choose exactly one of the available actions. Do not invent an action.\n"
+            "An integer action moves to the destination entity for that action.\n"
+            "Choose STOP only when the traversed path supports a final answer, or when no useful action remains.\n"
+            "Return JSON only, with no markdown or explanation.\n"
+            "To move: {\"action\": 0}\n"
+            "To stop: {\"action\": \"STOP\", \"answer\": \"final answer\"}\n\n"
+            f"Question: {question}\n"
+            f"Current entity: {current_entity_str} ({current_entity})\n"
+            "History of actions taken:\n"
+            f"{history_str}\n"
+            "Available actions:\n"
+            f"{actions_str}\n"
+        )
+        return template, history_str
+
+    @staticmethod
+    def parse_navigation_decision(content: str) -> dict:
+        """Parse and minimally validate a model navigation response."""
+        if not isinstance(content, str):
+            raise ValueError("Navigation response must be text.")
+
+        text = re.sub(r"^```(?:json)?\s*|\s*```$", "", content.strip(), flags=re.IGNORECASE)
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end < start:
+            raise ValueError("Navigation response does not contain a JSON object.")
+
+        decision = json.loads(text[start:end + 1])
+        if not isinstance(decision, dict) or "action" not in decision:
+            raise ValueError("Navigation response must contain an action field.")
+        return decision
+
+    def process_navigation_question(
+        self,
+        question: str,
+        start_node: str,
+        outgoing_index: dict,
+        entity_title: dict,
+        relation_title: dict,
+        max_steps: int = 4,
+        trace=None,
+    ) -> Tuple[str, str, dict]:
+        """Navigate from ``start_node`` until the model selects STOP."""
+        current_entity = start_node
+        history = []
+        aggregate_status = {
+            "status": "success",
+            "elapsed_time": 0.0,
+            "predicted_path": history,
+            "final_entity": current_entity,
+        }
+        additive_usage_fields = (
+            "prompt_tokens", "response_tokens", "total_tokens",
+            "prompt_seconds", "response_seconds", "total_seconds",
+        )
+
+        for _ in range(max_steps + 1):
+            actions = (
+                outgoing_index.get(current_entity, [])
+                if len(history) < max_steps
+                else []
+            )
+            prompt, history_str = self.prepare_navigation_prompt(
+                question, current_entity, history, actions, entity_title, relation_title
+            )
+            if trace is not None:
+                trace(
+                    f"\n=== Navigation step {len(history)} ===\n"
+                    f"MODEL INPUT\n{prompt}"
+                )
+
+            out, status_info = self.chat(user_text=prompt)
+            status_info.update(self.normalize_usage(out))
+
+            aggregate_status["elapsed_time"] += status_info.get("elapsed_time", 0.0)
+            for field in additive_usage_fields:
+                if field in status_info:
+                    aggregate_status[field] = aggregate_status.get(field, 0) + status_info[field]
+
+            if status_info.get("status") != "success":
+                aggregate_status.update({
+                    "status": status_info.get("status", "error"),
+                    "message": status_info.get("message", "Navigation request failed"),
+                    "navigation_steps": len(history),
+                })
+                prediction = "TIMEOUT" if status_info.get("status") == "timeout" else "ERROR"
+                if trace is not None:
+                    trace(f"NAVIGATION ERROR\n{aggregate_status['message']}")
+                return prediction, history_str, aggregate_status
+
+            try:
+                content = out["message"]["content"]
+                if trace is not None:
+                    trace(f"MODEL OUTPUT\n{content}")
+                decision = self.parse_navigation_decision(content)
+            except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
+                aggregate_status.update({
+                    "status": "error",
+                    "message": f"Invalid navigation response: {exc}",
+                    "navigation_steps": len(history),
+                })
+                if trace is not None:
+                    trace(f"NAVIGATION ERROR\n{aggregate_status['message']}")
+                return "ERROR", history_str, aggregate_status
+
+            selected_action = decision["action"]
+            if isinstance(selected_action, str) and selected_action.upper() == "STOP":
+                answer = decision.get("answer")
+                aggregate_status["navigation_steps"] = len(history)
+                if not isinstance(answer, str) or not answer.strip():
+                    aggregate_status["message"] = "STOP response did not include an answer."
+                    if trace is not None:
+                        trace(f"STOP REJECTED\n{aggregate_status['message']}")
+                    return "UNKNOWN", history_str, aggregate_status
+                if trace is not None:
+                    trace(f"STOP SELECTED\nFinal answer: {answer.strip()}")
+                return answer.strip(), history_str, aggregate_status
+
+            if isinstance(selected_action, bool):
+                selected_action = -1
+            try:
+                action_id = int(selected_action)
+            except (TypeError, ValueError):
+                action_id = -1
+
+            if action_id < 0 or action_id >= len(actions):
+                aggregate_status.update({
+                    "status": "error",
+                    "message": f"Invalid action ID: {selected_action}",
+                    "navigation_steps": len(history),
+                })
+                if trace is not None:
+                    trace(f"NAVIGATION ERROR\n{aggregate_status['message']}")
+                return "ERROR", history_str, aggregate_status
+
+            selected_triplet = actions[action_id]
+            history.append(selected_triplet)
+            current_entity = selected_triplet[2]
+            aggregate_status["final_entity"] = current_entity
+            if trace is not None:
+                readable_move = translate_path(
+                    [selected_triplet], entity_title, relation_title
+                )[0]
+                trace(
+                    f"VALIDATED MOVE [{action_id}]\n"
+                    f"  ({readable_move[0]}, {readable_move[1]}, {readable_move[2]})\n"
+                    f"New current entity: "
+                    f"{entity_title.get(current_entity, current_entity)} ({current_entity})"
+                )
+
+        readable_history = translate_path(history, entity_title, relation_title)
+        history_str = "\n".join(
+            f"  {index}. ({head}, {relation}, {tail})"
+            for index, (head, relation, tail) in enumerate(readable_history)
+        )
+        aggregate_status.update({
+            "message": f"Maximum navigation steps ({max_steps}) reached without STOP.",
+            "navigation_steps": len(history),
+        })
+        return "UNKNOWN", history_str, aggregate_status
 
     def _fetch_models(self):
         """

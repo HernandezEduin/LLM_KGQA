@@ -4,28 +4,25 @@ It supports subgraph sampling, evidence-based reasoning, and batch processing of
 """
 
 import argparse
+import ast
 import os
 from pathlib import Path
 
 import json
-import pandas as pd
 
 from tqdm import tqdm
-import warnings
 
 from model.LLM_KGQA import LLM_KGQA_Client
 from model.constants import valid_models
 
 from utils.basic import load_triplets, load_pandas, extract_literals
 from utils.kgqa_utils import compare_answers, extract_final_answer
-from utils.graph_utils import (
-    random_subgraph_sampling,
-    neighborhood_subgraph_sampling,
-    build_incidence_index,
-    build_relation_index,
-    neighborhood_subgraph_sampling_by_node,
-    random_subgraph_sampling_by_node,
-    generate_multi_answer_paths_from_source
+from utils.graph_utils import build_outgoing_index
+from llm_navigation_metrics import (
+    aggregate_answer_metrics,
+    aggregate_single_prediction_metrics,
+    score_path_fidelity_against_references,
+    score_single_final_entity,
 )
 
 from collections import defaultdict
@@ -35,11 +32,11 @@ def parse_args():
     """
     The `parse_args` function defines and parses command-line arguments for the script. These arguments include:
     - Dataset and data directory paths
-    - Subgraph sampling methods and parameters
+    - Graph-navigation parameters
     - LLM model selection and timeout settings
     - Debugging options
     """
-    parser = argparse.ArgumentParser(description="Subgraph Sampling for QA Dataset")
+    parser = argparse.ArgumentParser(description="Graph Navigation for QA Dataset")
     
     # dataset parameters
     parser.add_argument('--data-dir', type=str, default='./data',
@@ -47,9 +44,11 @@ def parse_args():
     parser.add_argument('--dataset', type=str, default='mquake',
                         help='Name of the dataset to process.')
     parser.add_argument('--hops', type=str, default='n',
-                        help='Number of hops for subgraph extraction.')
+                        help='QA dataset hop split to evaluate.')
     parser.add_argument('--batch-size', type=int, default=16,
                         help='Number of questions to process in a batch.')
+    parser.add_argument('--max-questions', type=int, default=None,
+                        help='Process only the first N test questions (must be positive).')
 
     # LLM parameters
     parser.add_argument('--llm-model', type=str, default='gemma3',
@@ -68,25 +67,19 @@ def parse_args():
     parser.add_argument('--temperature', type=float, default=0,
                         help='Sampling temperature for the LLM (0 = deterministic).')
 
-    # Sampling parameters
     parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed for sampling.')
-    parser.add_argument('--sampling-method', type=str, default='neighborhood',
-                        choices=['random', 'neighborhood', 'evidence'],
-                        help='Method for subgraph sampling.')
-    parser.add_argument('--subgraph-size', type=int, default=50,
-                        help='Number of triplets in the extracted subgraph.')
-    parser.add_argument('-e','--evidence-only', action='store_true',
-                        help='Whether to use evidence paths instead of the subgraph sampling.')
-    parser.add_argument('--max-depth', type=int, default=3,
-                        help='Maximum depth for neighborhood expansion (only for neighborhood sampling).')
+                        help='Random seed for model inference.')
     
     parser.add_argument('-d', '--debug', action='store_true',
                         help='Enable debug mode with verbose output.')
-    
-    # retrieval
-    parser.add_argument('-r', '--retrieve', action='store_true',
-                        help='Non-oracle subgraph retrieval method.')
+    parser.add_argument(
+        '--show-navigation', '--show-actions',
+        dest='show_navigation',
+        action='store_true',
+        help='Show every navigation prompt, model response, and validated move.',
+    )
+    parser.add_argument('--max-navigation-steps', type=int, default=4,
+                        help='Maximum number of graph edges the model may traverse before it must stop.')
     
     # Result parameters
     parser.add_argument('--result-dir', type=str, default='./results',
@@ -100,7 +93,7 @@ The main block of the script handles the following:
 1. Argument validation and adjustments based on user input.
 2. Loading datasets, triplets, and entity/relation mappings.
 3. Initializing the LLM client for processing questions.
-4. Iteratively processing batches of questions, performing subgraph sampling, and evaluating predictions.
+4. Iteratively navigating the graph for each question and evaluating predictions.
 5. Saving the results to a JSON file.
 """
 def initialize_statistics(total: int) -> Dict:
@@ -108,7 +101,7 @@ def initialize_statistics(total: int) -> Dict:
         'accuracy': 0,
         'running_count': 0,
         'total': total,
-        'subgraph_sizes': defaultdict(int),
+        'navigation_steps': defaultdict(int),
         'prompt_tokens': [],
         'response_tokens': [],
         'total_tokens': [],
@@ -127,11 +120,11 @@ def update_stats(
     status_info: Dict, 
     result: str, 
     full_pred: str, 
-    sub_graph_size: int,
+    navigation_steps: int,
 ) -> None:
     stats_dict['accuracy'] += int(result)
     stats_dict['running_count'] += 1
-    stats_dict['subgraph_sizes'][sub_graph_size] += 1
+    stats_dict['navigation_steps'][navigation_steps] += 1
     
     # append if exists
     if 'prompt_tokens' in status_info: stats_dict['prompt_tokens'].append(status_info['prompt_tokens'])
@@ -166,22 +159,72 @@ def avg_dict(vals: Dict[str, object]) -> Dict[str, float]:
     # check if dict contains lists, if it does, average them
 
 
+def normalize_reference_paths(value):
+    """Normalize a dataset Paths cell into a list of candidate triplet paths."""
+    if isinstance(value, str):
+        value = ast.literal_eval(value)
+    if not isinstance(value, (list, tuple)):
+        return []
+
+    def is_triplet(item):
+        return (
+            isinstance(item, (list, tuple))
+            and len(item) == 3
+            and not any(isinstance(part, (list, tuple, dict, set)) for part in item)
+        )
+
+    if all(is_triplet(edge) for edge in value):
+        return [[tuple(edge) for edge in value]]
+
+    candidates = []
+    for path in value:
+        if isinstance(path, (list, tuple)) and all(is_triplet(edge) for edge in path):
+            candidates.append([tuple(edge) for edge in path])
+    return candidates
+
+def normalize_relation_chain(value):
+    """Normalize a Path-Key cell into a relation sequence."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if stripped.startswith("["):
+            value = ast.literal_eval(stripped)
+        else:
+            value = stripped.split("->")
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return None
+
+def normalize_answer_entities(value):
+    """Normalize Answer-Entity into a set without changing entity ID types."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.startswith("["):
+            value = ast.literal_eval(stripped)
+        else:
+            return {value}
+    if isinstance(value, (list, tuple, set)):
+        return set(value)
+    return {value} if value is not None else set()
+
+def best_path_fidelity_score(predicted_path, reference_paths, relation_chain):
+    """Apply the benchmark multi-reference and relation-only scoring rules."""
+    if not reference_paths and relation_chain is None:
+        return None
+    return score_path_fidelity_against_references(
+        predicted_path=predicted_path,
+        reference_paths=reference_paths or None,
+        reference_relation_chain=relation_chain,
+    )
+
 if __name__ == '__main__':
     args = parse_args()
 
-    if args.evidence_only:
-        args.subgraph_size = None
-        args.sampling_method = 'evidence'
-        args.batch_size = 1
-        warnings.warn("Using evidence paths only; overriding subgraph sampling parameters.")
-
-    # Calculate minimum subgraph size based on batch size and hops
-    if args.sampling_method != 'evidence' and args.subgraph_size is not None:
-        max_hops = int(args.hops) if args.hops != 'n' else (4 if args.dataset == 'mquake' else 3)
-        graph_min_size = args.batch_size * max_hops
-        if args.subgraph_size < graph_min_size:
-            args.batch_size = graph_min_size//max_hops
-            warnings.warn(f"Subgraph size ({args.subgraph_size}) is smaller than batch_size * hops ({graph_min_size}). Reducing batch_size to {args.batch_size}.")
+    if args.max_navigation_steps < 0:
+        raise ValueError("--max-navigation-steps must be non-negative.")
+    if args.max_questions is not None and args.max_questions < 1:
+        raise ValueError("--max-questions must be positive.")
 
     # Define file paths
     data_dir = os.path.join(args.data_dir, args.dataset)
@@ -203,40 +246,18 @@ if __name__ == '__main__':
     # Load all triplets and build indices
     all_triplets = load_triplets(triplet_file)
     all_triplets = set(tuple(triplet) for triplet in all_triplets.values)
-    incidence, neighbors = build_incidence_index(all_triplets)
+    outgoing_index = build_outgoing_index(all_triplets)
 
     # Load QA dataset
     qa_df = load_pandas(qa_file)
     qa_df = qa_df[qa_df['SplitLabel'] == 'test']
+    if args.max_questions is not None:
+        qa_df = qa_df.head(args.max_questions)
 
-    is_multi_answer = False
     # check if answers are lists (multi-answer) or single values, and adjust accordingly
     if qa_df['Answer'].apply(lambda x: isinstance(x, str) and '[' == x[0]).all():
         qa_df['Answer'] = extract_literals(qa_df["Answer"])
         qa_df['Answer-Entity'] = extract_literals(qa_df["Answer-Entity"])
-        is_multi_answer = True
-
-    # Extract triplets from paths
-    is_multi_path = False
-    if "Paths" in qa_df.columns:
-        qa_df['Paths'] = extract_literals(qa_df["Paths"])
-    elif "Path-Key" in qa_df.columns:
-        relation_index = build_relation_index(all_triplets) # build relation index for evidence-based sampling
-        qa_df['Path-Key'] = qa_df['Path-Key'].apply(lambda x: x.split('->')) # split the path keys into lists
-        
-        qa_df['Paths'] = qa_df.apply(lambda row: generate_multi_answer_paths_from_source(
-            source_entity=row['Source-Entity'],
-            rel_list=row['Path-Key'],
-            relation_index=relation_index
-        ), axis=1)
-
-        # print(qa_df['Path-Key'].head(5))
-        # print(qa_df['Paths'].head(5))
-        # print(qa_df['Paths'].apply(len).head(5))
-        is_multi_path = True
-    else:
-        raise ValueError("QA dataframe must contain either 'Paths' or 'Path-Key' column for evidence paths.")
-    
 
     # prepare client
     CONFIG_PATH = Path(__file__).with_name("openwebui_config.json").parent / "configs" / "openwebui_config.json"
@@ -262,6 +283,11 @@ if __name__ == '__main__':
         for hop_size, count in hop_size_counts.items():
             statistics[f'{hop_size}'] = initialize_statistics(total=count)
 
+    navigation_metric_scores = {
+        section: {"path": [], "answer": []}
+        for section in statistics
+    }
+
     total_qa = len(qa_df)
     total_batches = (total_qa + args.batch_size - 1) // args.batch_size # ceiling division
 
@@ -269,83 +295,52 @@ if __name__ == '__main__':
     with tqdm(range(0, total_batches), desc="Processing Batches") as pbar:
         for i0 in pbar:
             qa_batch = qa_df[i0*args.batch_size:(i0+1)*args.batch_size]         # return the last smaller batch as is, even if size < batch_size
-            qa_path_batch = qa_batch['Paths']
-            if is_multi_path:
-                path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode().explode())
-            else:
-                path_triplets = set(tuple(triplet) for triplet in qa_path_batch.explode())
-
-            # Subgraph Sampling
-            """
-            Three subgraph sampling methods:
-            - Neighborhood Sampling: Expands the graph around specific entities up to a defined depth (includes evidence paths).
-            - Random Sampling: Selects random triplets from the graph (includes evidence paths).
-            - Evidence-Based Sampling: Uses predefined evidence paths.
-            """
-            if not args.retrieve: # oracle subgraph
-                if args.sampling_method == 'neighborhood':
-                    sub_graph = neighborhood_subgraph_sampling(
-                        full_graph=all_triplets,
-                        seeds=path_triplets,
-                        incidence=incidence,
-                        neighbors=neighbors,
-                        target_size=args.subgraph_size,
-                        max_depth=args.max_depth,
-                        rng_seed=args.seed + i0,
-                        fill_random_if_needed=True,
-                    )
-                elif args.sampling_method == 'random':
-                    sub_graph = random_subgraph_sampling(
-                        full_graph=all_triplets, 
-                        seeds=path_triplets, 
-                        target_size=args.subgraph_size,
-                        rng_seed=args.seed + i0
-                    )
-                elif args.sampling_method == 'evidence':
-                    sub_graph = path_triplets
-                else:
-                    raise ValueError(f"Unknown sampling method: {args.sampling_method}")
-
-            # Q per b
+            # Q per batch
             for i1 in range(len(qa_batch)):
                 question = qa_batch['Question'].iloc[i1]
                 start_node = qa_batch['Source-Entity'].iloc[i1]
                 answer = extract_final_answer(qa_batch['Answer'].iloc[i1], lower=True)
                 hop = qa_batch['Hops'].iloc[i1]
 
-                if args.retrieve: # non-oracle subgraph retrieval
-                    if args.sampling_method == 'neighborhood':
-                        sub_graph = neighborhood_subgraph_sampling_by_node(
-                            full_graph=all_triplets,
-                            start_node=start_node,
-                            incidence=incidence,
-                            neighbors=neighbors,
-                            target_size=args.subgraph_size,
-                            max_depth=args.max_depth,
-                            rng_seed=args.seed + i1,
-                            fill_random_if_needed=True,
-                        )
-                    elif args.sampling_method == 'random':
-                        sub_graph = random_subgraph_sampling_by_node(
-                            full_graph=all_triplets, 
-                            start_node=start_node, 
-                            target_size=args.subgraph_size,
-                            rng_seed=args.seed + i1
-                        )
-                    elif args.sampling_method == 'evidence':
-                        raise ValueError("Retrieval cannot use evidence.")
-                    else:
-                        raise ValueError(f"Unknown sampling method: {args.sampling_method}")
-
-                pred, sub_graph_txt, status_info = client.process_question(
-                    question,
-                    start_node, 
-                    sub_graph,
-                    entity_title, 
-                    relation_title, 
-                    args.seed + i0, 
-                    sort_graph=not args.evidence_only
+                pred, navigation_history_txt, status_info = client.process_navigation_question(
+                    question=question,
+                    start_node=start_node,
+                    outgoing_index=outgoing_index,
+                    entity_title=entity_title,
+                    relation_title=relation_title,
+                    max_steps=args.max_navigation_steps,
+                    trace=pbar.write if args.show_navigation else None,
                 )
+                reference_paths = (
+                    normalize_reference_paths(qa_batch["Paths"].iloc[i1])
+                    if "Paths" in qa_batch.columns
+                    else []
+                )
+                relation_chain = (
+                    normalize_relation_chain(qa_batch["Path-Key"].iloc[i1])
+                    if "Path-Key" in qa_batch.columns
+                    else None
+                )
+                valid_answer_entities = normalize_answer_entities(
+                    qa_batch["Answer-Entity"].iloc[i1]
+                )
+                path_score = best_path_fidelity_score(
+                    status_info["predicted_path"],
+                    reference_paths,
+                    relation_chain,
+                )
+                answer_entity_score = score_single_final_entity(
+                    status_info["final_entity"],
+                    valid_answer_entities,
+                )
+                metric_sections = ["overall"]
+                if args.hops == "n":
+                    metric_sections.append(f"{hop}")
+                for section in metric_sections:
+                    if path_score is not None:
+                        navigation_metric_scores[section]["path"].append(path_score)
+                    navigation_metric_scores[section]["answer"].append(answer_entity_score)
+
                 # create a copy of the full prediction before extracting final answer
                 full_pred = pred
                 pred = extract_final_answer(pred, lower=False)
@@ -356,7 +351,7 @@ if __name__ == '__main__':
                     status_info, 
                     result, 
                     full_pred, 
-                    len(sub_graph)
+                    status_info.get('navigation_steps', 0)
                 )
 
                 if args.hops == 'n':
@@ -365,7 +360,7 @@ if __name__ == '__main__':
                         status_info, 
                         result, 
                         full_pred, 
-                        len(sub_graph)
+                        status_info.get('navigation_steps', 0)
                     )
 
                 if args.debug and not result:
@@ -373,16 +368,16 @@ if __name__ == '__main__':
                     When the `--debug` flag is enabled, the script provides detailed output for each question, including:
                     - The question and its correct answer
                     - The predicted answer and full prediction details
-                    - The subgraph text and size
+                    - The navigation history and number of steps
                     - Whether the prediction was correct
                     """
                     pbar.write(f"\nQuestion: {question}")
                     pbar.write(f"Answer: {answer}")
                     pbar.write(f"Predicted: {pred}")
                     pbar.write(f"Full Prediction: {full_pred}")
-                    pbar.write(f"Subgraph Text: {sub_graph_txt}")
-                    pbar.write(f"Subgraph size: {len(sub_graph)} triplets")
-                    pbar.write(f"Subgraph sampling method: {'retrieve' if args.retrieve else 'oracle'}, {args.sampling_method}")
+                    pbar.write(f"Navigation history: {navigation_history_txt}")
+                    pbar.write(f"Navigation steps: {status_info.get('navigation_steps', 0)}")
+                    pbar.write(f"Navigation status: {status_info.get('message', '')}")
                     pbar.write(f"Correct: {compare_answers(pred.lower(), answer)}")
                     pbar.write(f"=========")
             # Update tqdm description with current accuracy at the end of the batch
@@ -393,11 +388,33 @@ if __name__ == '__main__':
     Calculate and display accuracy metrics for the overall dataset and individual hop sizes (if applicable).
     Results are saved in the `results/` directory with a descriptive filename.
     """
+    for section, metric_values in navigation_metric_scores.items():
+        statistics[section]["path_fidelity"] = aggregate_single_prediction_metrics(
+            metric_values["path"]
+        )
+        statistics[section]["final_entity"] = aggregate_answer_metrics(
+            metric_values["answer"]
+        )
+
     statistics['overall'] = avg_dict(statistics['overall'])
     acc = statistics['overall']['accuracy']
     total = statistics['overall']['running_count']
     statistics['overall']['avg_accuracy'] = 100*acc / total if total > 0 else 0
     print(f"\nFinal Accuracy: {acc}/{total} = {statistics['overall']['avg_accuracy']:.2f}%")
+    overall_path = statistics["overall"]["path_fidelity"]
+    overall_entity = statistics["overall"]["final_entity"]
+    print(
+        "Navigation Metrics: "
+        f"PED={overall_path.get('PED')}, "
+        f"RED={overall_path.get('RED')}, "
+        f"F1_SG={overall_path.get('F1_SG')}, "
+        f"F1_REL={overall_path.get('F1_REL')}, "
+        f"Hits1={overall_entity.get('Hits1')}, "
+        f"MRR={overall_entity.get('MRR')}, "
+        f"path_exact={overall_path.get('path_exact_match')}, "
+        f"relation_exact={overall_path.get('relation_chain_exact_match')}, "
+        f"triplet_f1={overall_path.get('triplet_f1')}"
+    )
     if args.hops == 'n':
         for hop_size in sorted(statistics.keys()):
             if hop_size == 'overall':
@@ -416,7 +433,14 @@ if __name__ == '__main__':
         model_name += "-instruct"
         if args.use_quantized:
             model_name += f"-q{args.quantization_bits}"
-    results_file = os.path.join(result_path, f"results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json")
+    question_limit_suffix = (
+        f"_questions{len(qa_df)}" if args.max_questions is not None else ""
+    )
+    results_file = os.path.join(
+        result_path,
+        f"results_{args.hops}hop_{model_name}_navigation{args.max_navigation_steps}"
+        f"{question_limit_suffix}_seed{args.seed}.json",
+    )
     with open(results_file, 'w', encoding='utf-8') as f:
         json.dump(statistics, f, indent=4)
         print(f"Results saved to {results_file}")

@@ -30,6 +30,31 @@ def build_incidence_index(full_graph: set):
 
     return incidence, neighbors
 
+def build_outgoing_index(
+    full_graph: set,
+) -> Dict[str, List[Tuple[str, str, str]]]:
+    """Index directed triplets by their head entity.
+
+    The returned lists are sorted so that action indices remain stable across
+    runs. Only edges directed from head to tail are included for each entity.
+    """
+    outgoing = defaultdict(list)
+
+    for head, relation, tail in full_graph:
+        outgoing[head].append((head, relation, tail))
+
+    for head in outgoing:
+        outgoing[head].sort(key=lambda triplet: (triplet[1], triplet[2]))
+
+    return outgoing
+
+def get_outgoing_edges(
+    current_entity: str,
+    outgoing_index: Dict[str, List[Tuple[str, str, str]]],
+) -> List[Tuple[str, str, str]]:
+    """Return the valid directed actions from ``current_entity``."""
+    return outgoing_index.get(current_entity, [])
+
 def build_relation_index(
     full_graph: set
 ) -> Dict[str, Dict[str, List[Tuple[str, str, str]]]]:
