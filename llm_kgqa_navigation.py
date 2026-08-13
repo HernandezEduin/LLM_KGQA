@@ -79,6 +79,8 @@ def parse_args():
                         help='Only zero-shot navigation is currently implemented.')
     parser.add_argument('--hybrid-threshold', type=int, default=50,
                         help='Use tuple mode when neighborhood size is <= this threshold, else factorized.')
+    parser.add_argument('--max-parse-retries', type=int, default=1,
+                        help='Retry a navigation decision this many times after malformed JSON output.')
 
     parser.add_argument('-d', '--debug', action='store_true',
                         help='Enable debug mode with verbose output.')
@@ -310,6 +312,8 @@ if __name__ == '__main__':
         raise ValueError('--max-actions must be positive when provided.')
     if args.hybrid_threshold < 0:
         raise ValueError('--hybrid-threshold must be non-negative.')
+    if args.max_parse_retries < 0:
+        raise ValueError('--max-parse-retries must be non-negative.')
     if args.prompting_approach != 'zero-shot':
         raise NotImplementedError(
             f"--prompting-approach {args.prompting_approach!r} is not implemented for "
@@ -394,6 +398,7 @@ if __name__ == '__main__':
                 memory_approach=args.memory_approach,
                 prompting_approach=args.prompting_approach,
                 hybrid_threshold=args.hybrid_threshold,
+                max_parse_retries=args.max_parse_retries,
                 trace=pbar.write if args.show_navigation else None,
             )
 
@@ -479,6 +484,7 @@ if __name__ == '__main__':
                 'prompting_approach': status_info.get('prompting_approach', args.prompting_approach),
                 'hybrid_threshold': status_info.get('hybrid_threshold', args.hybrid_threshold),
                 'max_actions': status_info.get('max_actions', args.max_actions),
+                'max_parse_retries': status_info.get('max_parse_retries', args.max_parse_retries),
                 'logical_decisions': status_info.get('logical_decisions', []),
                 'logical_decision_count': status_info.get('logical_decision_count', 0),
                 'actual_llm_calls': status_info.get('actual_llm_calls', 0),
@@ -591,6 +597,7 @@ if __name__ == '__main__':
             'max_navigation_steps': args.max_navigation_steps,
             'max_actions': args.max_actions,
             'hybrid_threshold': args.hybrid_threshold,
+            'max_parse_retries': args.max_parse_retries,
             'graph_directionality': 'outgoing',
             'max_questions': args.max_questions,
         },

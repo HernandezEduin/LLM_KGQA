@@ -249,11 +249,12 @@ class LLM_KGQA_Client:
         )
 
         action_lines = []
-        for action_id, (_, relation, tail) in enumerate(actions):
+        for action_id, (head, relation, tail) in enumerate(actions):
+            head_str = entity_title.get(head, head)
             relation_str = relation_title.get(relation, relation)
             tail_str = entity_title.get(tail, tail)
             action_lines.append(
-                f"  [{action_id}]. --{relation_str} ({relation})--> {tail_str} ({tail})"
+                f"  [{action_id}]. ({head_str} ({head}), {relation_str} ({relation}), {tail_str} ({tail}))"
             )
         actions_str = "\n".join(action_lines) if action_lines else "  (none)"
         evidence_scope = (
@@ -278,6 +279,14 @@ class LLM_KGQA_Client:
             "the destination entity if an action is selected, otherwise the current entity.\n"
             "- You may stop without selecting an action if the current entity already answers the question.\n"
             "- Otherwise, select the action that best continues the reasoning path and set \"stop\" to false.\n"
+            "- Resolve every relationship phrase in the question from the start entity outward; do not skip a "
+            "modifier just because a nearby entity seems plausible.\n"
+            "- Do not stop at an intermediate entity that answers only part of the question.\n"
+            "- If the current entity or selected destination fully answers the question, stop there immediately; "
+            "do not move onward to occupation, instance of, subclass of, family name, description source, "
+            "category, or other metadata unless the question asks for that.\n"
+            "- Prefer actions whose relation label resolves the next unmet phrase in the question; avoid generic "
+            "metadata actions unless they are directly requested.\n"
             f"- Base your decision only on the {evidence_scope}.\n\n"
 
             "Return exactly one JSON object and nothing else.\n"
@@ -353,8 +362,13 @@ class LLM_KGQA_Client:
             "Rules:\n"
             "- If you choose a relation, it must be the integer ID of exactly one listed relation.\n"
             "- Do not invent relations or entities.\n"
-            "- Set \"stop\" to true only when stopping at the current entity without selecting a relation.\n"
+            "- Set \"stop\" to true only when the current entity fully answers the question.\n"
+            "- Do not stop at an intermediate entity that answers only part of the question.\n"
+            "- Resolve every relationship phrase in the question from the start entity outward; do not skip a "
+            "modifier just because a nearby entity seems plausible.\n"
             "- If you select a relation, set \"stop\" to false; the controller will then ask for a destination entity.\n"
+            "- Prefer a relation that resolves the next unmet phrase in the question; avoid generic metadata "
+            "relations unless they are directly requested.\n"
             f"- Base your decision only on the {evidence_scope}.\n\n"
             "Return exactly one JSON object and nothing else.\n"
             "Select relation: {\"relation\": 0, \"stop\": false}\n"
@@ -395,9 +409,13 @@ class LLM_KGQA_Client:
             include_history=include_history,
         )
         entity_lines = []
-        for entity_id, (_, _, tail) in enumerate(relation_actions):
+        for entity_id, (head, relation, tail) in enumerate(relation_actions):
+            head_str = entity_title.get(head, head)
+            relation_str = relation_title.get(relation, relation)
             tail_str = entity_title.get(tail, tail)
-            entity_lines.append(f"  [{entity_id}]. {tail_str} ({tail})")
+            entity_lines.append(
+                f"  [{entity_id}]. ({head_str} ({head}), {relation_str} ({relation}), {tail_str} ({tail}))"
+            )
         entities_str = "\n".join(entity_lines) if entity_lines else "  (none)"
         evidence_scope = (
             "question, traversed path, current entity, selected relation, and available destination entities"
@@ -411,9 +429,15 @@ class LLM_KGQA_Client:
             "Rules:\n"
             "- Choose exactly one listed destination entity.\n"
             "- Do not invent entities.\n"
-            "- Set \"stop\" to true when the selected destination entity answers the question.\n"
+            "- Set \"stop\" to true only when the selected destination entity fully answers the question.\n"
             "- If \"stop\" is true, the selected destination entity will be treated as the final answer.\n"
             "- Otherwise, choose the destination that best continues the reasoning path and set \"stop\" to false.\n"
+            "- Do not stop at an intermediate entity that answers only part of the question.\n"
+            "- Resolve every relationship phrase in the question from the start entity outward; do not skip a "
+            "modifier just because a nearby entity seems plausible.\n"
+            "- If the selected destination fully answers the question, stop there immediately; do not move onward "
+            "to occupation, instance of, subclass of, family name, description source, category, or other metadata "
+            "unless the question asks for that.\n"
             f"- Base your decision only on the {evidence_scope}.\n\n"
             "Return exactly one JSON object and nothing else.\n"
             "Move and continue: {\"entity\": 0, \"stop\": false}\n"
@@ -569,6 +593,7 @@ class LLM_KGQA_Client:
         memory_approach: str = "full",
         prompting_approach: str = "zero-shot",
         hybrid_threshold: int = 50,
+        max_parse_retries: int = 1,
         trace=None,
     ) -> Tuple[str, str, dict]:
         """Navigate from ``start_node`` and use the terminal KG entity as the answer."""
@@ -587,6 +612,8 @@ class LLM_KGQA_Client:
             )
         if hybrid_threshold < 0:
             raise ValueError("hybrid_threshold must be non-negative.")
+        if max_parse_retries < 0:
+            raise ValueError("max_parse_retries must be non-negative.")
 
         current_entity = start_node
         history: List[Tuple[str, str, str]] = []
@@ -611,6 +638,7 @@ class LLM_KGQA_Client:
             "prompting_approach": prompting_approach,
             "hybrid_threshold": hybrid_threshold,
             "max_actions": max_actions,
+            "max_parse_retries": max_parse_retries,
             "logical_decisions": [],
             "logical_decision_count": 0,
             "actual_llm_calls": 0,
@@ -678,21 +706,71 @@ class LLM_KGQA_Client:
                 message=stage_status.get("message", "Navigation request failed"),
             )
 
-        def fail_parse(step: int, stage: str, strategy: str, content: str, exc: Exception):
+        def record_parse_error(
+            step: int,
+            stage: str,
+            strategy: str,
+            content: str,
+            exc: Exception,
+            attempt: int,
+        ) -> dict:
             error_record = {
                 "step": step,
                 "stage": stage,
                 "strategy": strategy,
+                "attempt": attempt,
                 "raw_output": content,
                 "error": str(exc),
             }
             aggregate_status["parse_validation_errors"].append(error_record)
+            return error_record
+
+        def fail_parse(step: int, stage: str, strategy: str, content: str, exc: Exception):
             return finalize(
                 status="error",
                 termination_reason="invalid_output",
                 final_entity=None,
-                message=f"Invalid {strategy}/{stage} navigation response: {exc}",
+                message=f"Invalid {strategy}/{stage} navigation response after retries: {exc}",
             )
+
+        def make_correction_prompt(prompt: str, stage: str, raw_output: str, exc: Exception) -> str:
+            return (
+                f"{prompt}\n"
+                "Your previous response for this exact navigation decision was invalid.\n"
+                f"Validation error: {exc}\n"
+                "Previous response:\n"
+                f"{raw_output}\n\n"
+                "Return only one corrected JSON object for the same decision. Do not include explanation, "
+                "markdown, prose, or any keys outside the required schema.\n"
+            )
+
+        def call_parse_stage(prompt: str, stage: str, strategy: str, parser):
+            current_prompt = prompt
+            last_content = None
+            last_exc = None
+            for attempt in range(max_parse_retries + 1):
+                content, status_info = self._call_navigation_stage(
+                    current_prompt,
+                    stage=stage,
+                    strategy=strategy,
+                    step=step,
+                    current_entity=current_entity,
+                    aggregate_status=aggregate_status,
+                    trace=trace,
+                )
+                if status_info.get("status") != "success" or content is None:
+                    return None, content, status_info, None
+                try:
+                    return parser(content), content, status_info, None
+                except ValueError as exc:
+                    last_content = content
+                    last_exc = exc
+                    record_parse_error(step, stage, strategy, content, exc, attempt)
+                    if attempt >= max_parse_retries:
+                        break
+                    aggregate_status["api_retries"] += 1
+                    current_prompt = make_correction_prompt(prompt, stage, content, exc)
+            return None, last_content, {"status": "parse_error", "message": str(last_exc)}, last_exc
 
         def fail_max_options(step: int, strategy: str, option_kind: str, option_count: int):
             aggregate_status["max_actions_exceeded"] = True
@@ -808,21 +886,16 @@ class LLM_KGQA_Client:
                 context_failure = fail_context_window(step, "tuple", strategy, prompt)
                 if context_failure is not None:
                     return context_failure
-                content, status_info = self._call_navigation_stage(
+                decision, content, status_info, parse_exc = call_parse_stage(
                     prompt,
                     stage="tuple",
                     strategy=strategy,
-                    step=step,
-                    current_entity=current_entity,
-                    aggregate_status=aggregate_status,
-                    trace=trace,
+                    parser=lambda raw: self.parse_navigation_decision(raw, len(actions)),
                 )
                 if status_info.get("status") != "success" or content is None:
+                    if parse_exc is not None:
+                        return fail_parse(step, "tuple", strategy, content or "", parse_exc)
                     return fail_stage(status_info, "api_error")
-                try:
-                    decision = self.parse_navigation_decision(content, len(actions))
-                except ValueError as exc:
-                    return fail_parse(step, "tuple", strategy, content, exc)
 
                 action_id = decision["action"]
                 if action_id is None:
@@ -894,24 +967,16 @@ class LLM_KGQA_Client:
             context_failure = fail_context_window(step, "relation", strategy, relation_prompt)
             if context_failure is not None:
                 return context_failure
-            relation_content, relation_status = self._call_navigation_stage(
+            relation_decision, relation_content, relation_status, parse_exc = call_parse_stage(
                 relation_prompt,
                 stage="relation",
                 strategy=strategy,
-                step=step,
-                current_entity=current_entity,
-                aggregate_status=aggregate_status,
-                trace=trace,
+                parser=lambda raw: self.parse_relation_decision(raw, len(relation_groups)),
             )
             if relation_status.get("status") != "success" or relation_content is None:
+                if parse_exc is not None:
+                    return fail_parse(step, "relation", strategy, relation_content or "", parse_exc)
                 return fail_stage(relation_status, "api_error")
-            try:
-                relation_decision = self.parse_relation_decision(
-                    relation_content,
-                    len(relation_groups),
-                )
-            except ValueError as exc:
-                return fail_parse(step, "relation", strategy, relation_content, exc)
 
             relation_id = relation_decision["relation"]
             if relation_id is None:
@@ -953,21 +1018,16 @@ class LLM_KGQA_Client:
             context_failure = fail_context_window(step, "entity", strategy, entity_prompt)
             if context_failure is not None:
                 return context_failure
-            entity_content, entity_status = self._call_navigation_stage(
+            entity_decision, entity_content, entity_status, parse_exc = call_parse_stage(
                 entity_prompt,
                 stage="entity",
                 strategy=strategy,
-                step=step,
-                current_entity=current_entity,
-                aggregate_status=aggregate_status,
-                trace=trace,
+                parser=lambda raw: self.parse_entity_decision(raw, len(relation_actions)),
             )
             if entity_status.get("status") != "success" or entity_content is None:
+                if parse_exc is not None:
+                    return fail_parse(step, "entity", strategy, entity_content or "", parse_exc)
                 return fail_stage(entity_status, "api_error")
-            try:
-                entity_decision = self.parse_entity_decision(entity_content, len(relation_actions))
-            except ValueError as exc:
-                return fail_parse(step, "entity", strategy, entity_content, exc)
 
             selected_triplet = relation_actions[entity_decision["entity"]]
             selected_action = actions.index(selected_triplet)
