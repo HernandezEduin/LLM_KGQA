@@ -152,13 +152,17 @@ class LLM_KGQA_Client:
     def prepare_navigation_prompt(
         self,
         question: str,
+        start_node: str,
         current_entity: str,
         history: List[Tuple[str, str, str]],
         actions: List[Tuple[str, str, str]],
+        step: int,
+        max_steps: int,
         entity_title: dict,
         relation_title: dict,
     ) -> Tuple[str, str]:
         """Build one graph-navigation prompt from controller-owned state."""
+        start_entity_str = entity_title.get(start_node, start_node)
         current_entity_str = entity_title.get(current_entity, current_entity)
         readable_history = translate_path(history, entity_title, relation_title)
         if readable_history:
@@ -174,23 +178,41 @@ class LLM_KGQA_Client:
             relation_str = relation_title.get(relation, relation)
             tail_str = entity_title.get(tail, tail)
             action_lines.append(
-                f"  {action_id}. --{relation_str} ({relation})--> {tail_str} ({tail})"
+                f"  [{action_id}]. --{relation_str} ({relation})--> {tail_str} ({tail})"
             )
-        action_lines.append("  STOP. Stop navigating and provide the final answer")
         actions_str = "\n".join(action_lines)
 
         template = (
-            "Navigate the knowledge graph to answer the question.\n"
-            "Choose exactly one of the available actions. Do not invent an action.\n"
-            "An integer action moves to the destination entity for that action.\n"
-            "Choose STOP only when the traversed path supports a final answer, or when no useful action remains.\n"
-            "Return JSON only, with no markdown or explanation.\n"
-            "To move: {\"action\": 0}\n"
-            "To stop: {\"action\": \"STOP\", \"answer\": \"final answer\"}\n\n"
+            "You are navigating a knowledge graph to answer a question.\n\n"
+
+            "At each step, make up to two decisions:\n"
+            "1. Select at most one of the available actions to move to its destination entity.\n"
+            "2. Decide whether to stop navigating.\n\n"
+
+            "Rules:\n"
+            "- If you choose an action, it must be the integer ID of exactly one listed action.\n"
+            "- Do not invent actions, relations, or entities.\n"
+            "- Set \"stop\" to true when the current entity, or the destination entity of the "
+            "selected action, answers the question based on the traversed path.\n"
+            "- If \"stop\" is true, the terminal entity will be treated as the final answer: "
+            "the destination entity if an action is selected, otherwise the current entity.\n"
+            "- You may stop without selecting an action if the current entity already answers the question.\n"
+            "- Otherwise, select the action that best continues the reasoning path and set \"stop\" to false.\n"
+            "- Base your decision only on the question, traversed path, current entity, and available actions.\n\n"
+
+            "Return exactly one JSON object and nothing else.\n"
+            "Move and continue: {\"action\": 0, \"stop\": false}\n"
+            "Move and stop: {\"action\": 0, \"stop\": true}\n"
+            "Stop at current entity: {\"action\": null, \"stop\": true}\n\n"
+
             f"Question: {question}\n"
+            f"Start entity: {start_entity_str} ({start_node})\n"
             f"Current entity: {current_entity_str} ({current_entity})\n"
-            "History of actions taken:\n"
-            f"{history_str}\n"
+            f"Step: {step} / {max_steps}\n\n"
+
+            "Traversed path:\n"
+            f"{history_str}\n\n"
+
             "Available actions:\n"
             f"{actions_str}\n"
         )
@@ -221,6 +243,7 @@ class LLM_KGQA_Client:
         entity_title: dict,
         relation_title: dict,
         max_steps: int = 4,
+        max_actions: int = 200,
         trace=None,
     ) -> Tuple[str, str, dict]:
         """Navigate from ``start_node`` until the model selects STOP."""
@@ -237,14 +260,28 @@ class LLM_KGQA_Client:
             "prompt_seconds", "response_seconds", "total_seconds",
         )
 
-        for _ in range(max_steps + 1):
+        for step in range(max_steps):
             actions = (
                 outgoing_index.get(current_entity, [])
                 if len(history) < max_steps
                 else []
             )
+
+            # trim the number of actions to avoid overwhelming the model
+            if len(actions) > max_actions:
+                # actions = random.sample(actions, max_actions)
+                actions = actions[:max_actions]
+
             prompt, history_str = self.prepare_navigation_prompt(
-                question, current_entity, history, actions, entity_title, relation_title
+                question=question, 
+                start_node=start_node, 
+                current_entity=current_entity, 
+                history=history, 
+                actions=actions, 
+                step=step + 1,
+                max_steps=max_steps, 
+                entity_title=entity_title, 
+                relation_title=relation_title
             )
             if trace is not None:
                 trace(
@@ -287,6 +324,7 @@ class LLM_KGQA_Client:
                 return "ERROR", history_str, aggregate_status
 
             selected_action = decision["action"]
+            selected_terminate = decision["stop"]
             if isinstance(selected_action, str) and selected_action.upper() == "STOP":
                 answer = decision.get("answer")
                 aggregate_status["navigation_steps"] = len(history)
