@@ -14,7 +14,7 @@ import pandas as pd
 from tqdm import tqdm
 import warnings
 
-from model.LLM_KGQA import LLM_KGQA_Client
+from model.llm_kgqa_subgraph import SubgraphLLMKGQAClient
 from model.constants import valid_models
 
 from utils.basic import load_triplets, load_pandas, extract_literals
@@ -242,7 +242,7 @@ if __name__ == '__main__':
     # prepare client
     CONFIG_PATH = Path(__file__).with_name("openwebui_config.json").parent / "configs" / "openwebui_config.json"
 
-    client = LLM_KGQA_Client(
+    client = SubgraphLLMKGQAClient(
         CONFIG_PATH,
         model_choice=args.llm_model,
         use_instruct=args.use_instruct,

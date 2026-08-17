@@ -1,0 +1,106 @@
+import random
+from typing import List, Tuple
+
+from model.llm_kgqa_base import BaseLLMKGQAClient
+from utils.kgqa_utils import translate_path
+
+
+class SubgraphLLMKGQAClient(BaseLLMKGQAClient):
+    """LLM client for subgraph-at-once KGQA experiments."""
+
+    def prepare_prompt(
+        self,
+        question: str,
+        start_node: str,
+        triplets: List[Tuple[str, str, str]],
+        entity_title: dict,
+        relation_title: dict,
+    ) -> Tuple[str, str]:
+        """
+        Prepare the prompt for the LLM based on the question and triplets.
+
+        Args:
+            question (str): The natural-language question.
+            start_node (str): The starting node for the subgraph.
+            triplets (List[Tuple[str, str, str]]): Knowledge-graph triplets.
+            entity_title (dict): Mapping of entity IDs to titles.
+            relation_title (dict): Mapping of relation IDs to titles.
+
+        Returns:
+            str: The formatted prompt string.
+        """
+        start_node_str = entity_title.get(start_node, start_node)
+        readable_triplets = translate_path(triplets, entity_title, relation_title)
+        triplets_str = "{\n" + "\n".join(
+            f"\t({head}, {relation}, {tail})"
+            for head, relation, tail in readable_triplets
+        ) + "\n}"
+        template = (
+            "You will be given a natural-language question, a starting node, and a set of knowledge-graph triplets.\n"
+            "Answer the question using ONLY the information supported by the provided triplets.\n"
+            "Each question contains a unique answer.\n"
+            "Return only the final answer (no explanation, no reasoning, no extra text).\n"
+            "Double-check the spelling of your answer.\n\n"
+            f"Question: {question}\n"
+            f"Starting Node: {start_node_str}\n"
+            "Triplets (head, relation, tail):\n"
+            f"{triplets_str}\n\n"
+        )
+        return template, triplets_str
+
+    def process_question(
+        self,
+        question: str,
+        start_node: str,
+        sub_graph: set,
+        entity_title: dict,
+        relation_title: dict,
+        random_seed: int = 42,
+        sort_graph: bool = True,
+    ) -> str:
+        """
+        Process a single question by preparing the prompt, sending it to the API, and extracting the prediction.
+
+        Args:
+            question (str): The natural-language question.
+            start_node (str): The starting node for the subgraph.
+            sub_graph (set): The subgraph of triplets to use for the question.
+            entity_title (dict): Mapping of entity IDs to titles.
+            relation_title (dict): Mapping of relation IDs to titles.
+            random_seed (int): Seed for random operations to ensure reproducibility.
+            sort_graph (bool): Whether to randomly shuffle the subgraph triplets.
+
+        Returns:
+            str: The predicted answer from the LLM.
+        """
+        # randomly shuffle the subgraph triplets to avoid any ordering bias
+        sub_graph = list(sub_graph)
+        if sort_graph:
+            random.Random(random_seed).shuffle(sub_graph)
+        template, triplets_str = self.prepare_prompt(
+            question=question,
+            start_node=start_node,
+            triplets=sub_graph,
+            entity_title=entity_title,
+            relation_title=relation_title,
+        )
+        out, status_info = self.chat(user_text=template)
+        status_info.update(self.normalize_usage(out))
+
+        if self.debug and status_info["status"] != "success":
+            print(
+                f"LLM response status: {status_info['status']}, "
+                f"message: {status_info.get('message', '')}"
+            )
+
+        if status_info["status"] == "timeout":
+            return "TIMEOUT", triplets_str, status_info
+        if status_info["status"] != "success":
+            return "ERROR", triplets_str, status_info
+
+        if out is None:
+            return "UNKNOWN", triplets_str, status_info
+
+        if type(out) != dict or "message" not in out or "content" not in out["message"]:
+            return "UNKNOWN", triplets_str, status_info
+        return out["message"]["content"], triplets_str, status_info

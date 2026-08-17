@@ -17,7 +17,7 @@ from typing import Any, Dict
 
 from tqdm import tqdm
 
-from model.LLM_KGQA import LLM_KGQA_Client
+from model.llm_kgqa_navigation import NavigationLLMKGQAClient
 from model.constants import valid_models
 from utils.basic import extract_literals, load_pandas, load_triplets
 from utils.graph_utils import build_outgoing_index
@@ -353,7 +353,7 @@ if __name__ == '__main__':
     qa_df = qa_df.reset_index(drop=False).rename(columns={'index': 'dataframe_index'})
 
     config_path = Path(__file__).with_name('openwebui_config.json').parent / 'configs' / 'openwebui_config.json'
-    client = LLM_KGQA_Client(
+    client = NavigationLLMKGQAClient(
         config_path,
         model_choice=args.llm_model,
         use_instruct=args.use_instruct,
