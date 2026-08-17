@@ -53,16 +53,16 @@ def load_api_config(path: Path) -> Tuple[str, str]:
 
     return base_url, api_key
 
-def list_models(base_url: str, headers: Dict) -> APIResponse:
+def list_models(base_url: str, headers: Dict[str, str]) -> APIResponse:
     """
     Fetch the list of available models from the API.
 
     Args:
         base_url (str): The base URL of the API.
-        headers (dict): HTTP headers for the request.
+        headers (Dict[str, str]): HTTP headers for the request.
 
     Returns:
-        dict: JSON response containing the list of models.
+        APIResponse: JSON response containing the list of models.
 
     Raises:
         HTTPError: If the API request fails.
@@ -76,7 +76,7 @@ def list_models(base_url: str, headers: Dict) -> APIResponse:
 
 def chat(
     base_url: str, 
-    headers: dict, 
+    headers: Dict[str, str], 
     model: str, 
     user_text: str,
     stream: bool = False,
@@ -90,7 +90,7 @@ def chat(
 
     Args:
         base_url (str): The base URL of the API.
-        headers (dict): HTTP headers for the request.
+        headers (Dict[str, str]): HTTP headers for the request.
         model (str): The model ID to use for the chat.
         user_text (str): The user's input text.
         stream (bool): Whether to use streaming responses.
@@ -100,8 +100,7 @@ def chat(
         timeout (int): Timeout in seconds for the API request.
 
     Returns:
-        dict: JSON response from the API.
-        dict: Status information including success, timeout, or error and elapsed time.
+        Tuple[APIResponse, StatusInfo]: JSON response and status information including success, timeout, or error.
 
     Raises:
         HTTPError: If the API request fails.
@@ -144,10 +143,10 @@ def extract_model_ids(models_resp: APIResponse) -> Dict[str, str]:
     Extract model IDs from the API response.
 
     Args:
-        models_resp (dict): JSON response containing model data.
+        models_resp (APIResponse): JSON response containing model data.
 
     Returns:
-        dict: Model IDs mapped to their names.
+        Dict[str, str]: Model IDs mapped to their names.
     """
     model_ids: Dict[str, str] = {}
 
@@ -172,7 +171,7 @@ def pick_model(model_ids: Dict[str, str], choice: str = 'gemma3') -> str:
     Select a model ID based on predefined preferences.
 
     Args:
-        model_ids (dict): Dictionary of model IDs mapped to their names.
+        model_ids (Dict[str, str]): Dictionary of model IDs mapped to their names.
 
     Returns:
         str: Selected model ID.
@@ -189,7 +188,7 @@ def pick_model(model_ids: Dict[str, str], choice: str = 'gemma3') -> str:
 
 def unload_model(
     base_url: str,
-    headers: dict,
+    headers: Dict[str, str],
     model: str,
     timeout: int = 30,
 ) -> None:
@@ -225,7 +224,7 @@ def unload_model(
 
 def register_cleanup_handlers(
     base_url: str,
-    headers: dict,
+    headers: Dict[str, str],
     model: str,
     on_cleanup: Optional[Callable[[], None]] = None,
 ) -> None:

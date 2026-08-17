@@ -20,6 +20,7 @@ from utils.api_utils import (
 )
 
 from utils.kgqa_types import APIResponse, StatusInfo
+from typing import Tuple
 
 # Durations: often in nanoseconds for Ollama-style stats
 def ns_to_s(x: object) -> float | None:
@@ -129,7 +130,7 @@ class BaseLLMKGQAClient:
         Fetch the list of available models from the API.
 
         Returns:
-            dict: JSON response containing the list of models.
+            APIResponse: JSON response containing the list of models.
         """
         return list_models(base_url=self.base_url, headers=self.headers)
 
@@ -144,7 +145,7 @@ class BaseLLMKGQAClient:
     def chat(
         self, 
         user_text: str
-    ) -> tuple[APIResponse, StatusInfo]:
+    ) -> Tuple[APIResponse, StatusInfo]:
         """
         Send a chat message to the API and get the response.
 
@@ -152,7 +153,7 @@ class BaseLLMKGQAClient:
             user_text (str): The user's input text.
 
         Returns:
-            dict: JSON response from the API.
+            Tuple[APIResponse, StatusInfo]: JSON response and status metadata from the API.
         """
         return chat(
             base_url=self.base_url,

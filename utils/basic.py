@@ -22,12 +22,12 @@ import ast
 import json
 import pandas as pd
 
-from typing import List, Dict, Union
+from typing import Any, Dict, List, Union
 
 #------------------------------------------------------------------------------
 'Loading & Saving Functions'
 
-def load_json(file_path: str) -> Dict[str, any]:
+def load_json(file_path: str) -> Dict[str, Any]:
     """
     Loads a JSON file from the specified file path.
 
@@ -35,7 +35,7 @@ def load_json(file_path: str) -> Dict[str, any]:
         file_path (str): The path to the JSON file.
 
     Returns:
-        Dict[str, any]: The loaded JSON data as a dictionary.
+        Dict[str, Any]: The loaded JSON data as a dictionary.
     """
     with open(file_path, 'r') as file:
         data = json.load(file)
@@ -81,7 +81,7 @@ def load_to_set(file_path: Union[str, List[str]]) -> set:
         assert False, 'Error! The file_path must either be a string or a list of strings'
     return set(df['qid'])
 
-def load_to_dict(file_path: Union[str, List[str]]) -> dict:
+def load_to_dict(file_path: Union[str, List[str]]) -> Dict[str, Any]:
     """
     Loads a tab-separated text file and converts it into a dictionary.
 
@@ -89,7 +89,7 @@ def load_to_dict(file_path: Union[str, List[str]]) -> dict:
         file_path (str or list): The path or list of paths to the text file(s).
 
     Returns:
-        dict: A dictionary with keys and values from the file.
+        Dict[str, Any]: A dictionary with keys and values from the file.
     """
     if type(file_path) is str:
         df = pd.read_csv(file_path, sep='\t')
@@ -164,12 +164,12 @@ def save_set_pandas(pd_set: set, file_path: str) -> None:
     
     df.to_csv(file_path, index=False, header=False)
     
-def save_dict_pandas(pd_dict: set, file_path: str, use_header: bool = False) -> None:
+def save_dict_pandas(pd_dict: Dict[str, Any], file_path: str, use_header: bool = False) -> None:
     """
     Saves a dictionary to a tab-separated text file using pandas.
 
     Args:
-        pd_dict (dict): The dictionary to save.
+        pd_dict (Dict[str, Any]): The dictionary to save.
         file_path (str): The path to store the text file.
     """
     df = pd.DataFrame(list(pd_dict.items()), columns=['Key', 'Value'])
@@ -190,15 +190,15 @@ def save_triplets(df: pd.DataFrame, file_path: str) -> None:
 #------------------------------------------------------------------------------
 'Sorting Functions'
 
-def revert_dict(dt):
+def revert_dict(dt: Dict[Any, Any]) -> Dict[Any, Any]:
     """
     Reverses the keys and values in a dictionary.
     
     Args:
-        dt (dict): The dictionary to be reversed.
+        dt (Dict[Any, Any]): The dictionary to be reversed.
     
     Returns:
-        dict: The dictionary with keys and values swapped.
+        Dict[Any, Any]: The dictionary with keys and values swapped.
     """
     return {value: key for key, value in dt.items()}
 
@@ -214,7 +214,7 @@ def sort_by_qid(df: pd.DataFrame, column_name: str = 'qid') -> pd.DataFrame:
         pd.DataFrame: The sorted DataFrame.
     """
     
-    df['numeric_part'] = df[column_name].str.extract('(\d+)').astype(int)
+    df['numeric_part'] = df[column_name].str.extract(r'(\d+)').astype(int)
     return df.sort_values(by='numeric_part').drop(columns='numeric_part')
 
 def sort_qid_list(qid_list: list) -> list:
@@ -231,15 +231,15 @@ def sort_qid_list(qid_list: list) -> list:
     sorted_df = sort_by_qid(df)
     return sorted_df['qid'].tolist()
 
-def sort_json_by_keys(json_data: Dict[str, any]) -> Dict[str, any]:
+def sort_json_by_keys(json_data: Dict[str, Any]) -> Dict[str, Any]:
     """
     Sorts a JSON dictionary by keys.
 
     Args:
-        json_data (Dict[str, any]): The JSON dictionary to sort.
+        json_data (Dict[str, Any]): The JSON dictionary to sort.
 
     Returns:
-        Dict[str, any]: The sorted JSON dictionary.
+        Dict[str, Any]: The sorted JSON dictionary.
     """
     sorted_items = sorted(json_data.items(), key=lambda item: int(item[0][1:]))
     

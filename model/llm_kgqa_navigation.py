@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any
+from typing import Any, Dict, Tuple
 
 from model.llm_kgqa_base import BaseLLMKGQAClient
 from utils.kgqa_types import (
@@ -12,6 +12,7 @@ from utils.kgqa_types import (
     OutgoingIndex,
     PromptParts,
     ReadableTriplet,
+    ReadableTripletList,
     RelationGroups,
     RelationId,
     RelationTitleMap,
@@ -62,7 +63,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         history: TripletList,
         entity_title: EntityTitleMap,
         relation_title: RelationTitleMap,
-    ) -> list[ReadableTriplet]:
+    ) -> ReadableTripletList:
         """
         Convert KG ID triplets into title triplets for logs and result JSON.
 
@@ -72,7 +73,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
 
         Returns:
-            list[ReadableTriplet]: Triplets with readable labels where available.
+            ReadableTripletList: Triplets with readable labels where available.
         """
         return translate_path(history, entity_title, relation_title)
 
@@ -295,7 +296,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         Returns:
             RelationGroups: Deterministically sorted relation groups.
         """
-        grouped: dict[RelationId, TripletList] = {}
+        grouped: Dict[RelationId, TripletList] = {}
         for triplet in actions:
             grouped.setdefault(triplet[1], []).append(triplet)
         return [
@@ -579,7 +580,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         """Conservative tokenizer-free context estimate for safety checks."""
         return max(len(prompt.split()), (len(prompt) + 3) // 4)
 
-    def prompt_fits_context(self, prompt: str) -> tuple[bool, int, int | None]:
+    def prompt_fits_context(self, prompt: str) -> Tuple[bool, int, int | None]:
         """
         Check whether a prompt is likely to fit in the configured model context window.
 
@@ -587,7 +588,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             prompt (str): Prompt text to estimate.
 
         Returns:
-            tuple[bool, int, int | None]: Fits flag, estimated prompt tokens, and context limit if known.
+            Tuple[bool, int, int | None]: Fits flag, estimated prompt tokens, and context limit if known.
         """
         estimated_tokens = self.estimate_prompt_tokens(prompt)
         context_window = getattr(self, "context_window", None)
@@ -604,7 +605,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         current_entity: EntityId,
         aggregate_status: NavigationStatus,
         trace: TraceFn | None = None,
-    ) -> tuple[str | None, NavigationStatus]:
+    ) -> Tuple[str | None, NavigationStatus]:
         """
         Execute one navigation prompt and record raw output plus usage metadata.
 
@@ -618,7 +619,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             trace (TraceFn | None): Optional sink for verbose prompt/output traces.
 
         Returns:
-            tuple[str | None, NavigationStatus]: Raw response content and call status.
+            Tuple[str | None, NavigationStatus]: Raw response content and call status.
         """
         if trace is not None:
             trace(

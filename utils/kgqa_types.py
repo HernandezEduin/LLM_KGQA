@@ -7,6 +7,7 @@ EntityId = str
 RelationId = str
 Triplet = Tuple[EntityId, RelationId, EntityId]
 ReadableTriplet = Tuple[str, str, str]
+ReadableTripletList = List[ReadableTriplet]
 TripletList = List[Triplet]
 TripletSet = Set[Triplet]
 TripletCollection = TripletList | TripletSet

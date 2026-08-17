@@ -1,5 +1,6 @@
 from collections import defaultdict
 from random import Random
+from typing import Tuple
 
 from utils.kgqa_types import (
     EntityId,
@@ -15,7 +16,7 @@ from utils.kgqa_types import (
     TripletSet,
 )
 
-def build_incidence_index(full_graph: TripletCollection) -> tuple[IncidenceIndex, NeighborIndex]:
+def build_incidence_index(full_graph: TripletCollection) -> Tuple[IncidenceIndex, NeighborIndex]:
     """
     Build incidence and neighbor indices for the graph.
 
@@ -23,7 +24,7 @@ def build_incidence_index(full_graph: TripletCollection) -> tuple[IncidenceIndex
         full_graph (TripletCollection): The complete set of triplets in the graph.
 
     Returns:
-        tuple[IncidenceIndex, NeighborIndex]: Incidence and neighbor indices.
+        Tuple[IncidenceIndex, NeighborIndex]: Incidence and neighbor indices.
     """
     incidence = defaultdict(list)
     neighbors = defaultdict(set)
@@ -138,8 +139,8 @@ def neighborhood_subgraph_sampling(
     Args:
         full_graph (TripletSet): The complete set of triplets in the graph.
         seeds (TripletSet): Initial set of triplets to include in the subgraph.
-        incidence (dict): Incidence index mapping entities to triplets.
-        neighbors (dict): Neighbor index mapping entities to neighbors.
+        incidence (IncidenceIndex): Incidence index mapping entities to triplets.
+        neighbors (NeighborIndex): Neighbor index mapping entities to neighbors.
         target_size (int): Desired size of the subgraph.
         max_depth (int): Maximum depth for neighborhood expansion.
         rng_seed (int): Random seed for reproducibility.
@@ -218,7 +219,7 @@ def neighborhood_subgraph_sampling_by_node(
     Perform neighborhood-based subgraph sampling starting from a single node entity.
 
     Args:
-        full_graph (set): The complete set of triplets in the graph.
+        full_graph (TripletSet): The complete set of triplets in the graph.
         start_node (EntityId): Initial node entity to seed the subgraph expansion.
         incidence (IncidenceIndex): Incidence index mapping entities to triplets.
         neighbors (NeighborIndex): Neighbor index mapping entities to neighbors.
@@ -303,7 +304,7 @@ def random_subgraph_sampling_by_node(
     Perform random subgraph sampling from single node entity over the entire graph. 
 
     Args:
-        full_graph (set): The complete set of triplets in the graph.
+        full_graph (TripletSet): The complete set of triplets in the graph.
         start_node (EntityId): Initial node entity.
         target_size (int): Desired size of the subgraph.
         rng_seed (int): Random seed for reproducibility.

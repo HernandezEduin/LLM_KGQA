@@ -3,7 +3,7 @@ from typing import List, Union
 
 from utils.kgqa_types import (
     EntityTitleMap,
-    ReadableTriplet,
+    ReadableTripletList,
     RelationTitleMap,
     TripletList,
 )
@@ -12,7 +12,7 @@ def translate_path(
     triplet_path: TripletList,
     entity_title: EntityTitleMap,
     relation_title: RelationTitleMap,
-) -> list[ReadableTriplet]:
+) -> ReadableTripletList:
     """
     Translate triplet paths into human-readable format using entity and relation titles.
 
@@ -22,7 +22,7 @@ def translate_path(
         relation_title (RelationTitleMap): Mapping of relation IDs to titles.
 
     Returns:
-        list[ReadableTriplet]: Human-readable triplet paths.
+        ReadableTripletList: Human-readable triplet paths.
     """
     readable_path = []
     for head, relation, tail in triplet_path:
