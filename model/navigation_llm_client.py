@@ -29,6 +29,34 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
     """LLM client for iterative knowledge-graph navigation KGQA experiments."""
 
     @staticmethod
+    def _format_mapped_reference(identifier: str, title_map: Dict[str, str]) -> str:
+        """Format a KG identifier with its title only when a real mapping exists.
+
+        Args:
+            identifier (str): Raw entity or relation identifier.
+            title_map (Dict[str, str]): Optional mapping from identifiers to readable titles.
+
+        Returns:
+            str: ``title (identifier)`` when mapped to a different title, otherwise ``identifier``.
+        """
+        if not title_map:
+            return identifier
+        title = title_map.get(identifier, identifier)
+        if title == identifier:
+            return identifier
+        return f"{title} ({identifier})"
+
+    @staticmethod
+    def _format_entity_reference(entity: EntityId, entity_title: EntityTitleMap) -> str:
+        """Format an entity for prompts without duplicating identity labels."""
+        return NavigationLLMKGQAClient._format_mapped_reference(entity, entity_title)
+
+    @staticmethod
+    def _format_relation_reference(relation: RelationId, relation_title: RelationTitleMap) -> str:
+        """Format a relation for prompts without duplicating identity labels."""
+        return NavigationLLMKGQAClient._format_mapped_reference(relation, relation_title)
+
+    @staticmethod
     def _format_navigation_history(
         history: TripletList,
         entity_title: EntityTitleMap,
@@ -215,8 +243,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         Returns:
             PromptParts: Prompt text and the formatted history block used in it.
         """
-        start_entity_str = entity_title.get(start_node, start_node)
-        current_entity_str = entity_title.get(current_entity, current_entity)
+        start_entity_str = self._format_entity_reference(start_node, entity_title)
+        current_entity_str = self._format_entity_reference(current_entity, entity_title)
         history_str = self._format_navigation_history(
             history,
             entity_title,
@@ -226,11 +254,11 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
         action_lines = []
         for action_id, (head, relation, tail) in enumerate(actions):
-            head_str = entity_title.get(head, head)
-            relation_str = relation_title.get(relation, relation)
-            tail_str = entity_title.get(tail, tail)
+            head_str = self._format_entity_reference(head, entity_title)
+            relation_str = self._format_relation_reference(relation, relation_title)
+            tail_str = self._format_entity_reference(tail, entity_title)
             action_lines.append(
-                f"  [{action_id}]. ({head_str} ({head}), {relation_str} ({relation}), {tail_str} ({tail}))"
+                f"  [{action_id}]. ({head_str}, {relation_str}, {tail_str})"
             )
         actions_str = "\n".join(action_lines) if action_lines else "  (none)"
         evidence_scope = (
@@ -259,20 +287,20 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "modifier just because a nearby entity seems plausible.\n"
             "- Do not stop at an intermediate entity that answers only part of the question.\n"
             "- If the current entity or selected destination fully answers the question, stop there immediately; "
-            "do not move onward to occupation, instance of, subclass of, family name, description source, "
-            "category, or other metadata unless the question asks for that.\n"
-            "- Prefer actions whose relation label resolves the next unmet phrase in the question; avoid generic "
-            "metadata actions unless they are directly requested.\n"
+            # "do not move onward to occupation, instance of, subclass of, family name, description source, "
+            # "category, or other metadata unless the question asks for that.\n"
+            # "- Prefer actions whose relation label resolves the next unmet phrase in the question; avoid generic "
+            # "metadata actions unless they are directly requested.\n"
             f"- Base your decision only on the {evidence_scope}.\n\n"
 
-            "Return exactly one JSON object and nothing else.\n"
+            "Return exactly one JSON object and NOTHING ELSE.\n"
             "Move and continue: {\"action\": 0, \"stop\": false}\n"
             "Move and stop: {\"action\": 0, \"stop\": true}\n"
             "Stop at current entity: {\"action\": null, \"stop\": true}\n\n"
 
             f"Question: {question}\n"
-            f"Start entity: {start_entity_str} ({start_node})\n"
-            f"Current entity: {current_entity_str} ({current_entity})\n"
+            f"Start entity: {start_entity_str}\n"
+            f"Current entity: {current_entity_str}\n"
             f"Step: {step} / {max_steps}\n\n"
 
             "Traversed path:\n"
@@ -335,8 +363,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         Returns:
             PromptParts: Prompt text and the formatted history block used in it.
         """
-        start_entity_str = entity_title.get(start_node, start_node)
-        current_entity_str = entity_title.get(current_entity, current_entity)
+        start_entity_str = self._format_entity_reference(start_node, entity_title)
+        current_entity_str = self._format_entity_reference(current_entity, entity_title)
         history_str = self._format_navigation_history(
             history,
             entity_title,
@@ -345,9 +373,9 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         )
         relation_lines = []
         for relation_id, (relation, relation_actions) in enumerate(relation_groups):
-            relation_str = relation_title.get(relation, relation)
+            relation_str = self._format_relation_reference(relation, relation_title)
             relation_lines.append(
-                f"  [{relation_id}]. {relation_str} ({relation}) "
+                f"  [{relation_id}]. {relation_str} "
                 f"[{len(relation_actions)} destination(s)]"
             )
         relations_str = "\n".join(relation_lines) if relation_lines else "  (none)"
@@ -376,8 +404,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "Select relation: {\"relation\": 0, \"stop\": false}\n"
             "Stop at current entity: {\"relation\": null, \"stop\": true}\n\n"
             f"Question: {question}\n"
-            f"Start entity: {start_entity_str} ({start_node})\n"
-            f"Current entity: {current_entity_str} ({current_entity})\n"
+            f"Start entity: {start_entity_str}\n"
+            f"Current entity: {current_entity_str}\n"
             f"Step: {step} / {max_steps}\n\n"
             "Traversed path:\n"
             f"{history_str}\n\n"
@@ -419,9 +447,9 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         Returns:
             PromptParts: Prompt text and the formatted history block used in it.
         """
-        start_entity_str = entity_title.get(start_node, start_node)
-        current_entity_str = entity_title.get(current_entity, current_entity)
-        relation_str = relation_title.get(selected_relation, selected_relation)
+        start_entity_str = self._format_entity_reference(start_node, entity_title)
+        current_entity_str = self._format_entity_reference(current_entity, entity_title)
+        selected_relation_str = self._format_relation_reference(selected_relation, relation_title)
         history_str = self._format_navigation_history(
             history,
             entity_title,
@@ -430,11 +458,11 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         )
         entity_lines = []
         for entity_id, (head, relation, tail) in enumerate(relation_actions):
-            head_str = entity_title.get(head, head)
-            relation_str = relation_title.get(relation, relation)
-            tail_str = entity_title.get(tail, tail)
+            head_str = self._format_entity_reference(head, entity_title)
+            relation_str = self._format_relation_reference(relation, relation_title)
+            tail_str = self._format_entity_reference(tail, entity_title)
             entity_lines.append(
-                f"  [{entity_id}]. ({head_str} ({head}), {relation_str} ({relation}), {tail_str} ({tail}))"
+                f"  [{entity_id}]. ({head_str}, {relation_str}, {tail_str})"
             )
         entities_str = "\n".join(entity_lines) if entity_lines else "  (none)"
         evidence_scope = (
@@ -463,9 +491,9 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "Move and continue: {\"entity\": 0, \"stop\": false}\n"
             "Move and stop: {\"entity\": 0, \"stop\": true}\n\n"
             f"Question: {question}\n"
-            f"Start entity: {start_entity_str} ({start_node})\n"
-            f"Current entity: {current_entity_str} ({current_entity})\n"
-            f"Selected relation: {relation_str} ({selected_relation})\n"
+            f"Start entity: {start_entity_str}\n"
+            f"Current entity: {current_entity_str}\n"
+            f"Selected relation: {selected_relation_str}\n"
             f"Step: {step} / {max_steps}\n\n"
             "Traversed path:\n"
             f"{history_str}\n\n"

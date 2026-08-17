@@ -13,7 +13,7 @@ import os
 from collections import defaultdict
 from numbers import Number
 from pathlib import Path
-from typing import Any
+from typing import Any, Tuple
 
 from tqdm import tqdm
 
@@ -23,9 +23,11 @@ from utils.basic import extract_literals, load_pandas, load_triplets
 from utils.graph_utils import build_outgoing_index
 from utils.kgqa_types import (
     EntityId,
+    EntityTitleMap,
     MetricScores,
     PathList,
     RelationChain,
+    RelationTitleMap,
     StatusInfo,
     Statistics,
     TripletList,
@@ -320,6 +322,66 @@ def get_row_value(row: object, key: str, default: Any = None) -> Any:
     return row[key] if key in row else default
 
 
+def load_title_maps(
+    entity_file: str,
+    relation_file: str,
+) -> Tuple[EntityTitleMap, RelationTitleMap, StatusInfo]:
+    """Load optional entity/relation label maps, falling back to identity labels.
+
+    Encoded datasets such as MQuAKE provide ``node_data.csv`` and
+    ``relation_data.csv``. Unencoded datasets such as kinship_v2 omit those
+    files; in that case the raw node and relation strings are already readable,
+    so empty maps intentionally trigger the existing identity fallback.
+
+    Args:
+        entity_file (str): Path to optional node_data.csv with QID and Title columns.
+        relation_file (str): Path to optional relation_data.csv with Property and Title columns.
+
+    Returns:
+        Tuple[EntityTitleMap, RelationTitleMap, StatusInfo]: Entity title map,
+            relation title map, and metadata describing each mapping source.
+
+    Raises:
+        ValueError: If a provided mapping file is missing required columns.
+    """
+    mapping_status: StatusInfo = {
+        'entity_title_source': 'identity',
+        'relation_title_source': 'identity',
+        'entity_title_count': 0,
+        'relation_title_count': 0,
+        'entity_title_file': entity_file,
+        'relation_title_file': relation_file,
+    }
+
+    entity_title: EntityTitleMap = {}
+    if os.path.exists(entity_file):
+        entity_df = load_pandas(entity_file)
+        required_columns = {'QID', 'Title'}
+        if not required_columns.issubset(entity_df.columns):
+            raise ValueError(
+                f"Entity mapping file {entity_file} must contain columns {sorted(required_columns)}."
+            )
+        entity_df.set_index('QID', inplace=True)
+        entity_title = entity_df['Title'].to_dict()
+        mapping_status['entity_title_source'] = 'file'
+        mapping_status['entity_title_count'] = len(entity_title)
+
+    relation_title: RelationTitleMap = {}
+    if os.path.exists(relation_file):
+        relation_df = load_pandas(relation_file)
+        required_columns = {'Property', 'Title'}
+        if not required_columns.issubset(relation_df.columns):
+            raise ValueError(
+                f"Relation mapping file {relation_file} must contain columns {sorted(required_columns)}."
+            )
+        relation_df.set_index('Property', inplace=True)
+        relation_title = relation_df['Title'].to_dict()
+        mapping_status['relation_title_source'] = 'file'
+        mapping_status['relation_title_count'] = len(relation_title)
+
+    return entity_title, relation_title, mapping_status
+
+
 if __name__ == '__main__':
     args = parse_args()
 
@@ -345,14 +407,10 @@ if __name__ == '__main__':
     entity_file = os.path.join(data_dir, 'node_data.csv')
     relation_file = os.path.join(data_dir, 'relation_data.csv')
 
-    entity_df = load_pandas(entity_file)
-    relation_df = load_pandas(relation_file)
-
-    entity_df.set_index('QID', inplace=True)
-    relation_df.set_index('Property', inplace=True)
-
-    entity_title = entity_df['Title'].to_dict()
-    relation_title = relation_df['Title'].to_dict()
+    entity_title, relation_title, title_mapping_status = load_title_maps(
+        entity_file,
+        relation_file,
+    )
 
     all_triplets_df = load_triplets(triplet_file)
     all_triplets = set(tuple(triplet) for triplet in all_triplets_df.values)
@@ -618,6 +676,7 @@ if __name__ == '__main__':
             'hybrid_threshold': args.hybrid_threshold,
             'max_parse_retries': args.max_parse_retries,
             'graph_directionality': 'outgoing',
+            'title_mapping': title_mapping_status,
             'max_questions': args.max_questions,
         },
         'statistics': statistics,
