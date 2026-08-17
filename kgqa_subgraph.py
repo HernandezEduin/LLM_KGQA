@@ -13,6 +13,7 @@ import pandas as pd
 
 from tqdm import tqdm
 import warnings
+from typing import Tuple
 
 from model.subgraph_llm_client import SubgraphLLMKGQAClient
 from model.constants import valid_models
@@ -31,7 +32,12 @@ from utils.graph_utils import (
 
 from collections import defaultdict
 
-from utils.kgqa_types import Statistics, StatusInfo
+from utils.kgqa_types import (
+    EntityTitleMap,
+    RelationTitleMap,
+    Statistics,
+    StatusInfo,
+)
 
 def parse_args():
     """
@@ -168,6 +174,65 @@ def avg_dict(vals: Statistics) -> Statistics:
     # check if dict contains lists, if it does, average them
 
 
+def load_title_maps(
+    entity_file: str,
+    relation_file: str,
+) -> Tuple[EntityTitleMap, RelationTitleMap, StatusInfo]:
+    """Load optional entity/relation label maps, falling back to identity labels.
+
+    Encoded datasets provide ``node_data.csv`` and ``relation_data.csv``.
+    Unencoded datasets omit those files; in that case raw node and relation
+    strings are already readable, so empty maps trigger identity formatting.
+
+    Args:
+        entity_file (str): Path to optional node_data.csv with QID and Title columns.
+        relation_file (str): Path to optional relation_data.csv with Property and Title columns.
+
+    Returns:
+        Tuple[EntityTitleMap, RelationTitleMap, StatusInfo]: Entity title map,
+            relation title map, and metadata describing each mapping source.
+
+    Raises:
+        ValueError: If a provided mapping file is missing required columns.
+    """
+    mapping_status: StatusInfo = {
+        'entity_title_source': 'identity',
+        'relation_title_source': 'identity',
+        'entity_title_count': 0,
+        'relation_title_count': 0,
+        'entity_title_file': entity_file,
+        'relation_title_file': relation_file,
+    }
+
+    entity_title: EntityTitleMap = {}
+    if os.path.exists(entity_file):
+        entity_df = load_pandas(entity_file)
+        required_columns = {'QID', 'Title'}
+        if not required_columns.issubset(entity_df.columns):
+            raise ValueError(
+                f"Entity mapping file {entity_file} must contain columns {sorted(required_columns)}."
+            )
+        entity_df.set_index('QID', inplace=True)
+        entity_title = entity_df['Title'].to_dict()
+        mapping_status['entity_title_source'] = 'file'
+        mapping_status['entity_title_count'] = len(entity_title)
+
+    relation_title: RelationTitleMap = {}
+    if os.path.exists(relation_file):
+        relation_df = load_pandas(relation_file)
+        required_columns = {'Property', 'Title'}
+        if not required_columns.issubset(relation_df.columns):
+            raise ValueError(
+                f"Relation mapping file {relation_file} must contain columns {sorted(required_columns)}."
+            )
+        relation_df.set_index('Property', inplace=True)
+        relation_title = relation_df['Title'].to_dict()
+        mapping_status['relation_title_source'] = 'file'
+        mapping_status['relation_title_count'] = len(relation_title)
+
+    return entity_title, relation_title, mapping_status
+
+
 if __name__ == '__main__':
     args = parse_args()
 
@@ -192,15 +257,11 @@ if __name__ == '__main__':
     entity_file = os.path.join(data_dir, 'node_data.csv')
     relation_file = os.path.join(data_dir, 'relation_data.csv')
 
-    # Load entity and relation mappings
-    entity_df = load_pandas(entity_file)
-    relation_df = load_pandas(relation_file)
-
-    entity_df.set_index('QID', inplace=True)
-    relation_df.set_index('Property', inplace=True)
-
-    entity_title = entity_df['Title'].to_dict()
-    relation_title = relation_df['Title'].to_dict()
+    # Load optional entity and relation mappings. Missing files mean raw IDs are already readable.
+    entity_title, relation_title, title_mapping_status = load_title_maps(
+        entity_file,
+        relation_file,
+    )
 
     # Load all triplets and build indices
     all_triplets = load_triplets(triplet_file)
@@ -419,6 +480,15 @@ if __name__ == '__main__':
         if args.use_quantized:
             model_name += f"-q{args.quantization_bits}"
     results_file = os.path.join(result_path, f"results_{args.hops}hop_{model_name}_subgraph{args.subgraph_size}_{'retrieve' if args.retrieve else 'oracle'}_{args.sampling_method}_seed{args.seed}.json")
+    payload = {
+        'config': {
+            'dataset': args.dataset,
+            'hop_split': args.hops,
+            'data_dir': args.data_dir,
+            'title_mapping': title_mapping_status,
+        },
+        'statistics': statistics,
+    }
     with open(results_file, 'w', encoding='utf-8') as f:
-        json.dump(statistics, f, indent=4)
+        json.dump(payload, f, indent=4)
         print(f"Results saved to {results_file}")

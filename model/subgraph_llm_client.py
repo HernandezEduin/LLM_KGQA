@@ -1,4 +1,5 @@
 import random
+from typing import Dict
 
 from model.base_llm_client import BaseLLMKGQAClient
 from utils.kgqa_types import (
@@ -7,14 +8,45 @@ from utils.kgqa_types import (
     PromptParts,
     RelationTitleMap,
     SubgraphResult,
+    Triplet,
     TripletCollection,
     TripletList,
 )
-from utils.kgqa_utils import translate_path
 
 
 class SubgraphLLMKGQAClient(BaseLLMKGQAClient):
     """LLM client for subgraph-at-once KGQA experiments."""
+
+    @staticmethod
+    def _format_mapped_reference(identifier: str, title_map: Dict[str, str]) -> str:
+        """Format a KG identifier with its title only when a real mapping exists.
+
+        Args:
+            identifier (str): Raw entity or relation identifier.
+            title_map (Dict[str, str]): Optional mapping from identifiers to readable titles.
+
+        Returns:
+            str: ``title (identifier)`` when mapped to a different title, otherwise ``identifier``.
+        """
+        if not title_map:
+            return identifier
+        title = title_map.get(identifier, identifier)
+        if title == identifier:
+            return identifier
+        return f"{title} ({identifier})"
+
+    @staticmethod
+    def _format_triplet(
+        triplet: Triplet,
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
+    ) -> str:
+        """Format one prompt triplet without duplicating identity labels."""
+        head, relation, tail = triplet
+        head_str = SubgraphLLMKGQAClient._format_mapped_reference(head, entity_title)
+        relation_str = SubgraphLLMKGQAClient._format_mapped_reference(relation, relation_title)
+        tail_str = SubgraphLLMKGQAClient._format_mapped_reference(tail, entity_title)
+        return f"({head_str}, {relation_str}, {tail_str})"
 
     def prepare_prompt(
         self,
@@ -37,11 +69,10 @@ class SubgraphLLMKGQAClient(BaseLLMKGQAClient):
         Returns:
             PromptParts: Prompt text and the formatted triplet block used in it.
         """
-        start_node_str = entity_title.get(start_node, start_node)
-        readable_triplets = translate_path(triplets, entity_title, relation_title)
+        start_node_str = self._format_mapped_reference(start_node, entity_title)
         triplets_str = "{\n" + "\n".join(
-            f"\t({head}, {relation}, {tail})"
-            for head, relation, tail in readable_triplets
+            f"\t{self._format_triplet(triplet, entity_title, relation_title)}"
+            for triplet in triplets
         ) + "\n}"
         template = (
             "You will be given a natural-language question, a starting node, and a set of knowledge-graph triplets.\n"
