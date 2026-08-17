@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Tuple, Dict
+from typing import Any, Dict, List, Tuple, TypeVar
 
 from model.base_llm_client import BaseLLMKGQAClient
 from utils.kgqa_types import (
@@ -23,6 +23,9 @@ from utils.kgqa_types import (
     TripletList,
 )
 from utils.kgqa_utils import translate_path
+
+
+OptionT = TypeVar("OptionT")
 
 
 class NavigationLLMKGQAClient(BaseLLMKGQAClient):
@@ -697,7 +700,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
             relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
             max_steps (int): Maximum controller steps before stopping at the current entity.
-            max_actions (int | None): Optional hard cap for listed options; no legal options are discarded.
+            max_actions (int | None): Optional cap for listed prompt options. When exceeded,
+                only the first max_actions sorted options are shown to the LLM.
             navigation_approach (str): One of tuple, factorized, or hybrid.
             memory_approach (str): Whether to expose full path memory or hide it from prompts.
             prompting_approach (str): Prompting mode; currently zero-shot only.
@@ -758,6 +762,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "raw_model_outputs": [],
             "parse_validation_errors": [],
             "max_actions_exceeded": False,
+            "max_actions_truncated": False,
+            "max_actions_truncations": [],
             "context_window_exceeded": False,
             "graph_directionality": "outgoing",
         }
@@ -896,24 +902,31 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     current_prompt = make_correction_prompt(prompt, stage, content, exc)
             return None, last_content, {"status": "parse_error", "message": str(last_exc)}, last_exc
 
-        def fail_max_options(
+        def limit_options(
             step: int,
             strategy: str,
             option_kind: str,
-            option_count: int,
-        ) -> NavigationResult:
+            options: List[OptionT],
+        ) -> List[OptionT]:
+            option_count = len(options)
+            if max_actions is None or option_count <= max_actions:
+                return options
+
             aggregate_status["max_actions_exceeded"] = True
-            aggregate_status["max_actions_kind"] = option_kind
-            aggregate_status["max_actions_count"] = option_count
-            return finalize(
-                status="error",
-                termination_reason="max_actions_exceeded",
-                final_entity=None,
-                message=(
-                    f"{strategy} {option_kind} count {option_count} exceeds "
-                    f"configured --max-actions={max_actions}; no legal actions were discarded."
-                ),
-            )
+            aggregate_status["max_actions_truncated"] = True
+            aggregate_status["max_actions_truncations"].append({
+                "step": step,
+                "strategy": strategy,
+                "option_kind": option_kind,
+                "original_count": option_count,
+                "shown_count": max_actions,
+            })
+            if trace is not None:
+                trace(
+                    f"MAX ACTIONS APPLIED ({strategy}/{option_kind})\n"
+                    f"Showing first {max_actions} of {option_count} available options."
+                )
+            return options[:max_actions]
 
         def fail_context_window(
             step: int,
@@ -935,7 +948,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 final_entity=None,
                 message=(
                     f"Estimated {stage} prompt size ({estimated_tokens} tokens) exceeds "
-                    f"configured context window ({context_window}); no legal actions were discarded."
+                    f"configured context window ({context_window})."
                 ),
             )
 
@@ -1003,15 +1016,14 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
             if strategy == "tuple":
                 # Tuple navigation asks the LLM to choose directly from full outgoing edges.
-                if max_actions is not None and neighborhood_size > max_actions:
-                    return fail_max_options(step, strategy, "tuple_action", neighborhood_size)
+                prompted_actions = limit_options(step, strategy, "tuple_action", actions)
 
                 prompt, _ = self.prepare_navigation_prompt(
                     question=question,
                     start_node=start_node,
                     current_entity=current_entity,
                     history=history,
-                    actions=actions,
+                    actions=prompted_actions,
                     step=step,
                     max_steps=max_steps,
                     entity_title=entity_title,
@@ -1025,7 +1037,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     prompt,
                     stage="tuple",
                     strategy=strategy,
-                    parser=lambda raw: self.parse_navigation_decision(raw, len(actions)),
+                    parser=lambda raw: self.parse_navigation_decision(raw, len(prompted_actions)),
                 )
                 if status_info.get("status") != "success" or content is None:
                     if parse_exc is not None:
@@ -1052,7 +1064,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                         message="LLM stopped at current entity.",
                     )
 
-                selected_triplet = actions[action_id]
+                selected_triplet = prompted_actions[action_id]
                 history.append(selected_triplet)
                 current_entity = selected_triplet[2]
                 aggregate_status["final_entity"] = current_entity
@@ -1085,15 +1097,14 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
             # Factorized navigation first chooses a relation, then a destination among that relation's edges.
             relation_groups = self._group_actions_by_relation(actions)
-            if max_actions is not None and len(relation_groups) > max_actions:
-                return fail_max_options(step, strategy, "relation", len(relation_groups))
+            prompted_relation_groups = limit_options(step, strategy, "relation", relation_groups)
 
             relation_prompt, _ = self.prepare_relation_navigation_prompt(
                 question=question,
                 start_node=start_node,
                 current_entity=current_entity,
                 history=history,
-                relation_groups=relation_groups,
+                relation_groups=prompted_relation_groups,
                 step=step,
                 max_steps=max_steps,
                 entity_title=entity_title,
@@ -1107,7 +1118,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 relation_prompt,
                 stage="relation",
                 strategy=strategy,
-                parser=lambda raw: self.parse_relation_decision(raw, len(relation_groups)),
+                parser=lambda raw: self.parse_relation_decision(raw, len(prompted_relation_groups)),
             )
             if relation_status.get("status") != "success" or relation_content is None:
                 if parse_exc is not None:
@@ -1134,9 +1145,13 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     message="LLM stopped at current entity during relation selection.",
                 )
 
-            selected_relation, relation_actions = relation_groups[relation_id]
-            if max_actions is not None and len(relation_actions) > max_actions:
-                return fail_max_options(step, strategy, "destination_entity", len(relation_actions))
+            selected_relation, relation_actions = prompted_relation_groups[relation_id]
+            prompted_relation_actions = limit_options(
+                step,
+                strategy,
+                "destination_entity",
+                relation_actions,
+            )
 
             entity_prompt, _ = self.prepare_entity_navigation_prompt(
                 question=question,
@@ -1144,7 +1159,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 current_entity=current_entity,
                 history=history,
                 selected_relation=selected_relation,
-                relation_actions=relation_actions,
+                relation_actions=prompted_relation_actions,
                 step=step,
                 max_steps=max_steps,
                 entity_title=entity_title,
@@ -1158,14 +1173,14 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 entity_prompt,
                 stage="entity",
                 strategy=strategy,
-                parser=lambda raw: self.parse_entity_decision(raw, len(relation_actions)),
+                parser=lambda raw: self.parse_entity_decision(raw, len(prompted_relation_actions)),
             )
             if entity_status.get("status") != "success" or entity_content is None:
                 if parse_exc is not None:
                     return fail_parse(step, "entity", strategy, entity_content or "", parse_exc)
                 return fail_stage(entity_status, "api_error")
 
-            selected_triplet = relation_actions[entity_decision["entity"]]
+            selected_triplet = prompted_relation_actions[entity_decision["entity"]]
             selected_action = actions.index(selected_triplet)
             history.append(selected_triplet)
             current_entity = selected_triplet[2]

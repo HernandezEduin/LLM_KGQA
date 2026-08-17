@@ -74,9 +74,8 @@ def parse_args():
 
     # Navigation parameters
     parser.add_argument('--max-actions', type=int, default=None,
-                        help=('Optional safety cap for the number of options shown in a single prompt. '
-                              'If exceeded, the episode is recorded as max_actions_exceeded; legal '
-                              'actions are not truncated or sampled.'))
+                        help=('Optional cap for the number of options shown in a single prompt. '
+                              'If exceeded, only the first N sorted options are shown to the LLM.'))
     parser.add_argument('--max-navigation-steps', type=int, default=4,
                         help='Maximum number of graph edges the model may traverse before termination.')
     parser.add_argument('--navigation-approach', type=str, default='tuple',
@@ -128,6 +127,7 @@ def initialize_statistics(total: int) -> Statistics:
         'timeouts': 0,
         'errors': 0,
         'max_actions_exceeded': 0,
+        'max_actions_truncated': 0,
     }
 
 
@@ -172,6 +172,7 @@ def update_stats(
     stats_dict['timeouts'] += int(prediction == 'TIMEOUT')
     stats_dict['errors'] += int(prediction == 'ERROR')
     stats_dict['max_actions_exceeded'] += int(bool(status_info.get('max_actions_exceeded')))
+    stats_dict['max_actions_truncated'] += int(bool(status_info.get('max_actions_truncated')))
 
 
 def average(values):
@@ -521,6 +522,8 @@ if __name__ == '__main__':
                 'path_validation': path_validation,
                 'graph_directionality': status_info.get('graph_directionality', 'outgoing'),
                 'max_actions_exceeded': bool(status_info.get('max_actions_exceeded')),
+                'max_actions_truncated': bool(status_info.get('max_actions_truncated')),
+                'max_actions_truncations': status_info.get('max_actions_truncations', []),
                 'context_window_exceeded': bool(status_info.get('context_window_exceeded')),
                 'estimated_prompt_tokens': status_info.get('estimated_prompt_tokens'),
                 'context_window': status_info.get('context_window'),
