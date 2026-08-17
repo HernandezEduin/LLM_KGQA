@@ -74,8 +74,8 @@ python ./kgqa_navigation.py \
 Navigation modes:
 
 - `tuple`: the LLM chooses directly from full outgoing edge actions.
-- `factorized`: the LLM chooses a relation first, then a destination entity.
-- `hybrid`: uses tuple mode for small neighborhoods and factorized mode for larger ones.
+- `factorized`: the LLM chooses a relation first, then receives the normal action prompt limited to only that relation's edges.
+- `hybrid`: uses tuple mode for small neighborhoods and the same two-stage factorized flow for larger ones.
 
 `--max-actions` caps the number of options shown in each prompt. If a node has more than `N` sorted options, only the first `N` are shown to the LLM. This does not terminate the episode by itself. Result JSON records this with `max_actions_truncated` and `max_actions_truncations`.
 
@@ -152,3 +152,5 @@ This project is licensed under the Academic License.
 - [x] Create a parent class and child clients for subgraph and iterative navigation.
 - [ ] Include a human navigation GUI for manually navigating the knowledge graph.
 - [ ] Double-check that LLM cancellation still works.
+- [ ] Navigation: Add a option for to randomly sample a subset of actions when the number of actions exceeds `--max-actions` instead of always truncating to the first `N` sorted actions.
+- [ ] Add an option for directionality in the graph controller to allow for directed edges in the KG.
