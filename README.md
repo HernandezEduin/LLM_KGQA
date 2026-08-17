@@ -152,5 +152,9 @@ This project is licensed under the Academic License.
 - [x] Create a parent class and child clients for subgraph and iterative navigation.
 - [ ] Include a human navigation GUI for manually navigating the knowledge graph.
 - [ ] Double-check that LLM cancellation still works.
-- [ ] Navigation: Add a option for to randomly sample a subset of actions when the number of actions exceeds `--max-actions` instead of always truncating to the first `N` sorted actions.
-- [ ] Add an option for directionality in the graph controller to allow for directed edges in the KG.
+- [ ] Navigation: Implement the non-zero-shot modes currently exposed by `--prompting-approach` (`io`, `one-shot`, and future few-shot variants).
+- [ ] Navigation: Add graph directionality options (`outgoing`, `incoming`, `bidirectional`) and update action indexing, path validation, and result config accordingly.
+- [ ] Navigation: Add action selection policies for `--max-actions`, such as seeded random sampling or question-aware ranking, instead of always truncating to the first `N` sorted actions.
+- [ ] Navigation: Store both prompt-local option IDs and original sorted graph-action IDs in episode records, especially for truncated tuple prompts and factorized relation-action prompts.
+- [x] Navigation: Remove or rewire the obsolete entity-stage prompt/parser now that factorized navigation reuses the tuple action prompt for the selected relation.
+- [ ] Add one-shot and few-shot prompting options for both subgraph and navigation tasks.
