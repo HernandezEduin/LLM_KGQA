@@ -9,6 +9,8 @@ from model.constants import (
     has_quantized_versions,
     valid_models,
 )
+from typing import Dict, Tuple
+
 from utils.api_utils import (
     chat,
     extract_model_ids,
@@ -19,8 +21,16 @@ from utils.api_utils import (
     unload_model,
 )
 
-from utils.kgqa_types import APIResponse, StatusInfo
-from typing import Tuple
+from utils.kgqa_types import (
+    APIResponse,
+    EntityId,
+    EntityTitleMap,
+    RelationId,
+    RelationTitleMap,
+    StatusInfo,
+    Triplet,
+)
+
 
 # Durations: often in nanoseconds for Ollama-style stats
 def ns_to_s(x: object) -> float | None:
@@ -33,6 +43,72 @@ def ns_to_s(x: object) -> float | None:
 
 class BaseLLMKGQAClient:
     """Shared LLM API client for KGQA experiments."""
+
+    @staticmethod
+    def _format_mapped_reference(identifier: str, title_map: Dict[str, str]) -> str:
+        """Format a KG identifier with its title only when a real mapping exists.
+
+        Args:
+            identifier (str): Raw entity or relation identifier.
+            title_map (Dict[str, str]): Optional mapping from identifiers to readable titles.
+
+        Returns:
+            str: ``title (identifier)`` when mapped to a different title, otherwise ``identifier``.
+        """
+        if not title_map:
+            return identifier
+        title = title_map.get(identifier, identifier)
+        if title == identifier:
+            return identifier
+        return f"{title} ({identifier})"
+
+    @staticmethod
+    def _format_entity_reference(entity: EntityId, entity_title: EntityTitleMap) -> str:
+        """Format an entity for prompts without duplicating identity labels.
+
+        Args:
+            entity (EntityId): Raw entity identifier.
+            entity_title (EntityTitleMap): Optional entity title mapping.
+
+        Returns:
+            str: Readable prompt reference for the entity.
+        """
+        return BaseLLMKGQAClient._format_mapped_reference(entity, entity_title)
+
+    @staticmethod
+    def _format_relation_reference(relation: RelationId, relation_title: RelationTitleMap) -> str:
+        """Format a relation for prompts without duplicating identity labels.
+
+        Args:
+            relation (RelationId): Raw relation identifier.
+            relation_title (RelationTitleMap): Optional relation title mapping.
+
+        Returns:
+            str: Readable prompt reference for the relation.
+        """
+        return BaseLLMKGQAClient._format_mapped_reference(relation, relation_title)
+
+    @staticmethod
+    def _format_triplet(
+        triplet: Triplet,
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
+    ) -> str:
+        """Format one KG triplet for prompts without duplicating identity labels.
+
+        Args:
+            triplet (Triplet): Raw KG triplet as head, relation, tail.
+            entity_title (EntityTitleMap): Optional entity title mapping.
+            relation_title (RelationTitleMap): Optional relation title mapping.
+
+        Returns:
+            str: Prompt-ready triplet text.
+        """
+        head, relation, tail = triplet
+        head_str = BaseLLMKGQAClient._format_entity_reference(head, entity_title)
+        relation_str = BaseLLMKGQAClient._format_relation_reference(relation, relation_title)
+        tail_str = BaseLLMKGQAClient._format_entity_reference(tail, entity_title)
+        return f"({head_str}, {relation_str}, {tail_str})"
 
     def __init__(
         self,

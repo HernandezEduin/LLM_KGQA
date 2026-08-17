@@ -1,6 +1,6 @@
 import json
 import re
-from typing import Any, Dict, Tuple
+from typing import Any, Tuple, Dict
 
 from model.base_llm_client import BaseLLMKGQAClient
 from utils.kgqa_types import (
@@ -27,34 +27,6 @@ from utils.kgqa_utils import translate_path
 
 class NavigationLLMKGQAClient(BaseLLMKGQAClient):
     """LLM client for iterative knowledge-graph navigation KGQA experiments."""
-
-    @staticmethod
-    def _format_mapped_reference(identifier: str, title_map: Dict[str, str]) -> str:
-        """Format a KG identifier with its title only when a real mapping exists.
-
-        Args:
-            identifier (str): Raw entity or relation identifier.
-            title_map (Dict[str, str]): Optional mapping from identifiers to readable titles.
-
-        Returns:
-            str: ``title (identifier)`` when mapped to a different title, otherwise ``identifier``.
-        """
-        if not title_map:
-            return identifier
-        title = title_map.get(identifier, identifier)
-        if title == identifier:
-            return identifier
-        return f"{title} ({identifier})"
-
-    @staticmethod
-    def _format_entity_reference(entity: EntityId, entity_title: EntityTitleMap) -> str:
-        """Format an entity for prompts without duplicating identity labels."""
-        return NavigationLLMKGQAClient._format_mapped_reference(entity, entity_title)
-
-    @staticmethod
-    def _format_relation_reference(relation: RelationId, relation_title: RelationTitleMap) -> str:
-        """Format a relation for prompts without duplicating identity labels."""
-        return NavigationLLMKGQAClient._format_mapped_reference(relation, relation_title)
 
     @staticmethod
     def _format_navigation_history(
