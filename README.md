@@ -59,3 +59,7 @@ This project is licensed under the Academic License.
 - [x] Add a feature to calculate the number of tokens in the prompt.
 - [x] Add a feature to increment the context window of the llm (num_ctx).
 - [ ] Add an option to just evalute the LLM on the question without any context (zero-shot), just the question and the answer choices (if any).
+- [ ] Manually revise the Path-Fidelity Metrics.
+- [ ] Ensure the PED and F1_SG accept multiple answers for a single question. Reconstruct the path on-the-fly to calculate the metrics.
+- [ ] Allow compatibility with other datasets like Kinship, MetaQA, PathQuestion, and more. This includes adding support for different graph structures and question formats.
+- [ ] Create a parent class for LLM_KGQA and child classes for each task: subgraph and iterative navigation.
