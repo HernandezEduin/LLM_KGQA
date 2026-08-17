@@ -19,10 +19,10 @@ from utils.api_utils import (
     unload_model,
 )
 
-from typing import Tuple, Dict
+from utils.kgqa_types import APIResponse, StatusInfo
 
 # Durations: often in nanoseconds for Ollama-style stats
-def ns_to_s(x):
+def ns_to_s(x: object) -> float | None:
     """Convert nanoseconds to seconds, returning None when unavailable."""
     try:
         return float(x) / 1e9
@@ -124,7 +124,7 @@ class BaseLLMKGQAClient:
         self.model_choice = pick_model(self.model_ids, choice=model_name)
         print("\nUsing model:", self.model_choice)
 
-    def _fetch_models(self) -> Dict[str, object]:
+    def _fetch_models(self) -> APIResponse:
         """
         Fetch the list of available models from the API.
 
@@ -144,7 +144,7 @@ class BaseLLMKGQAClient:
     def chat(
         self, 
         user_text: str
-    ) -> Tuple[dict, Dict[str, object]]:
+    ) -> tuple[APIResponse, StatusInfo]:
         """
         Send a chat message to the API and get the response.
 
@@ -167,8 +167,8 @@ class BaseLLMKGQAClient:
 
     def normalize_usage(
         self, 
-        raw: Dict[str, object]
-    ) -> Dict[str, object]:
+        raw: APIResponse
+    ) -> StatusInfo:
         """
         Normalize token usage returned by different backends (OpenAI-style, Ollama/OpenWebUI-style, etc.)
         into a stable schema.

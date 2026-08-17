@@ -6,7 +6,9 @@ import time
 import json
 from pathlib import Path
 
-from typing import List, Tuple, Dict, Optional, Callable
+from typing import Tuple, Dict, Callable, List, Optional
+
+from utils.kgqa_types import APIResponse, StatusInfo
 
 # ---- Config loading ----
 # Expected JSON format:
@@ -17,7 +19,7 @@ from typing import List, Tuple, Dict, Optional, Callable
 
 CONFIG_PATH = Path(__file__).with_name("openwebui_config.json").parent / "configs" / "openwebui_config.json"
 
-def load_api_config(path: Path) -> tuple[str, str]:
+def load_api_config(path: Path) -> Tuple[str, str]:
     """
     Load configuration from a JSON file.
 
@@ -25,7 +27,7 @@ def load_api_config(path: Path) -> tuple[str, str]:
         path (Path): Path to the configuration file.
 
     Returns:
-        tuple[str, str]: Base URL and API key from the configuration.
+        Tuple[str, str]: Base URL and API key from the configuration.
 
     Raises:
         FileNotFoundError: If the configuration file does not exist.
@@ -51,7 +53,7 @@ def load_api_config(path: Path) -> tuple[str, str]:
 
     return base_url, api_key
 
-def list_models(base_url: str, headers: dict) -> dict:
+def list_models(base_url: str, headers: Dict) -> APIResponse:
     """
     Fetch the list of available models from the API.
 
@@ -82,7 +84,7 @@ def chat(
     seed: int | None = None,
     temperature: float | None = None,
     timeout: int = 120
-) -> Tuple[dict, Dict[str, object]]:
+) -> Tuple[APIResponse, StatusInfo]:
     """
     Send a chat message to the API and get the response.
 
@@ -137,7 +139,7 @@ def chat(
         print("Error: An unexpected error occurred.", str(e))
         return {}, {"status": "error", "elapsed_time": elapsed_time, "message": str(e)}
 
-def extract_model_ids(models_resp: dict) -> Dict[str, str]:
+def extract_model_ids(models_resp: APIResponse) -> Dict[str, str]:
     """
     Extract model IDs from the API response.
 

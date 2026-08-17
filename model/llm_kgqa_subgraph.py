@@ -1,7 +1,15 @@
 import random
-from typing import List, Tuple
 
 from model.llm_kgqa_base import BaseLLMKGQAClient
+from utils.kgqa_types import (
+    EntityId,
+    EntityTitleMap,
+    PromptParts,
+    RelationTitleMap,
+    SubgraphResult,
+    TripletCollection,
+    TripletList,
+)
 from utils.kgqa_utils import translate_path
 
 
@@ -11,23 +19,23 @@ class SubgraphLLMKGQAClient(BaseLLMKGQAClient):
     def prepare_prompt(
         self,
         question: str,
-        start_node: str,
-        triplets: List[Tuple[str, str, str]],
-        entity_title: dict,
-        relation_title: dict,
-    ) -> Tuple[str, str]:
+        start_node: EntityId,
+        triplets: TripletList,
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
+    ) -> PromptParts:
         """
         Prepare the prompt for the LLM based on the question and triplets.
 
         Args:
             question (str): The natural-language question.
-            start_node (str): The starting node for the subgraph.
-            triplets (List[Tuple[str, str, str]]): Knowledge-graph triplets.
-            entity_title (dict): Mapping of entity IDs to titles.
-            relation_title (dict): Mapping of relation IDs to titles.
+            start_node (EntityId): The starting node for the subgraph.
+            triplets (TripletList): Knowledge-graph triplets.
+            entity_title (EntityTitleMap): Mapping of entity IDs to titles.
+            relation_title (RelationTitleMap): Mapping of relation IDs to titles.
 
         Returns:
-            str: The formatted prompt string.
+            PromptParts: Prompt text and the formatted triplet block used in it.
         """
         start_node_str = entity_title.get(start_node, start_node)
         readable_triplets = translate_path(triplets, entity_title, relation_title)
@@ -51,27 +59,27 @@ class SubgraphLLMKGQAClient(BaseLLMKGQAClient):
     def process_question(
         self,
         question: str,
-        start_node: str,
-        sub_graph: set,
-        entity_title: dict,
-        relation_title: dict,
+        start_node: EntityId,
+        sub_graph: TripletCollection,
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
         random_seed: int = 42,
         sort_graph: bool = True,
-    ) -> str:
+    ) -> SubgraphResult:
         """
         Process a single question by preparing the prompt, sending it to the API, and extracting the prediction.
 
         Args:
             question (str): The natural-language question.
-            start_node (str): The starting node for the subgraph.
-            sub_graph (set): The subgraph of triplets to use for the question.
-            entity_title (dict): Mapping of entity IDs to titles.
-            relation_title (dict): Mapping of relation IDs to titles.
+            start_node (EntityId): The starting node for the subgraph.
+            sub_graph (TripletCollection): The subgraph of triplets to use for the question.
+            entity_title (EntityTitleMap): Mapping of entity IDs to titles.
+            relation_title (RelationTitleMap): Mapping of relation IDs to titles.
             random_seed (int): Seed for random operations to ensure reproducibility.
             sort_graph (bool): Whether to randomly shuffle the subgraph triplets.
 
         Returns:
-            str: The predicted answer from the LLM.
+            SubgraphResult: Prediction, formatted subgraph text, and call status metadata.
         """
         # randomly shuffle the subgraph triplets to avoid any ordering bias
         sub_graph = list(sub_graph)

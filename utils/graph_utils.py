@@ -1,20 +1,29 @@
 from collections import defaultdict
 from random import Random
-import pandas as pd
 
-from typing import Any, List, Tuple, Set, Dict, Union
+from utils.kgqa_types import (
+    EntityId,
+    IncidenceIndex,
+    NeighborIndex,
+    OutgoingIndex,
+    Path,
+    PathList,
+    RelationChain,
+    RelationIndex,
+    TripletCollection,
+    TripletList,
+    TripletSet,
+)
 
-import sys
-
-def build_incidence_index(full_graph: set):
+def build_incidence_index(full_graph: TripletCollection) -> tuple[IncidenceIndex, NeighborIndex]:
     """
     Build incidence and neighbor indices for the graph.
 
     Args:
-        full_graph (set): The complete set of triplets in the graph.
+        full_graph (TripletCollection): The complete set of triplets in the graph.
 
     Returns:
-        tuple: Incidence index and neighbor index.
+        tuple[IncidenceIndex, NeighborIndex]: Incidence and neighbor indices.
     """
     incidence = defaultdict(list)
     neighbors = defaultdict(set)
@@ -31,8 +40,8 @@ def build_incidence_index(full_graph: set):
     return incidence, neighbors
 
 def build_outgoing_index(
-    full_graph: set,
-) -> Dict[str, List[Tuple[str, str, str]]]:
+    full_graph: TripletCollection,
+) -> OutgoingIndex:
     """Index directed triplets by their head entity.
 
     The returned lists are sorted so that action indices remain stable across
@@ -49,43 +58,48 @@ def build_outgoing_index(
     return outgoing
 
 def get_outgoing_edges(
-    current_entity: str,
-    outgoing_index: Dict[str, List[Tuple[str, str, str]]],
-) -> List[Tuple[str, str, str]]:
+    current_entity: EntityId,
+    outgoing_index: OutgoingIndex,
+) -> TripletList:
     """Return the valid directed actions from ``current_entity``."""
     return outgoing_index.get(current_entity, [])
 
 def build_relation_index(
-    full_graph: set
-) -> Dict[str, Dict[str, List[Tuple[str, str, str]]]]:
+    full_graph: TripletCollection,
+) -> RelationIndex:
     """
     Builds an index for quick lookup of triplets based on their relation and head entity.
 
     Args:
-        triplet_df (pd.DataFrame): A DataFrame containing triplets with columns 'head', 'relation', and 'tail'.
+        full_graph (TripletCollection): The complete set of triplets in the graph.
     Returns:
-        Dict[str, Dict[str, List[Tuple[str, str, str]]]]: A nested dictionary where the first key is the relation, 
+        RelationIndex: A nested dictionary where the first key is the relation, 
             the second key is the head entity, and the value is a list of triplets that match the relation and head.
     """
-    relation_index: Dict[str, Dict[str, List[Tuple[str, str, str]]]] = {}
+    relation_index: RelationIndex = {}
 
     for h, r, t in full_graph:
         relation_index.setdefault(r, {}).setdefault(h, []).append((h, r, t))
 
     return relation_index
 
-def random_subgraph_sampling(full_graph: set, seeds: set, target_size: int, rng_seed: int = 42) -> list:
+def random_subgraph_sampling(
+    full_graph: TripletSet,
+    seeds: TripletSet,
+    target_size: int,
+    rng_seed: int = 42,
+) -> TripletList:
     """
     Perform random subgraph sampling from the full graph.
 
     Args:
-        full_graph (set): The complete set of triplets in the graph.
-        seeds (set): Initial set of triplets to include in the subgraph.
+        full_graph (TripletSet): The complete set of triplets in the graph.
+        seeds (TripletSet): Initial set of triplets to include in the subgraph.
         target_size (int): Desired size of the subgraph.
         rng_seed (int): Random seed for reproducibility.
 
     Returns:
-        set: Subgraph containing the sampled triplets.
+        TripletList: Subgraph containing the sampled triplets.
     """
     samples_space_remaining = target_size - len(seeds)
     rng = Random(rng_seed)
@@ -109,21 +123,21 @@ def random_subgraph_sampling(full_graph: set, seeds: set, target_size: int, rng_
     return shuffled_triplets
 
 def neighborhood_subgraph_sampling(
-    full_graph: set,
-    seeds: set,
-    incidence,
-    neighbors,
+    full_graph: TripletSet,
+    seeds: TripletSet,
+    incidence: IncidenceIndex,
+    neighbors: NeighborIndex,
     target_size: int,
     max_depth: int = 2,
     rng_seed: int = 0,
     fill_random_if_needed: bool = True,
-) -> list:
+) -> TripletList:
     """
     Perform neighborhood-based subgraph sampling.
 
     Args:
-        full_graph (set): The complete set of triplets in the graph.
-        seeds (set): Initial set of triplets to include in the subgraph.
+        full_graph (TripletSet): The complete set of triplets in the graph.
+        seeds (TripletSet): Initial set of triplets to include in the subgraph.
         incidence (dict): Incidence index mapping entities to triplets.
         neighbors (dict): Neighbor index mapping entities to neighbors.
         target_size (int): Desired size of the subgraph.
@@ -132,7 +146,7 @@ def neighborhood_subgraph_sampling(
         fill_random_if_needed (bool): Whether to fill the subgraph randomly if under target size.
 
     Returns:
-        set: Subgraph containing the sampled triplets.
+        TripletList: Subgraph containing the sampled triplets.
     """
     if target_size <= 0:
         return []
@@ -191,30 +205,30 @@ def neighborhood_subgraph_sampling(
     return shuffled_subgraph
 
 def neighborhood_subgraph_sampling_by_node(
-    full_graph: set,
-    start_node,
-    incidence,
-    neighbors,
+    full_graph: TripletSet,
+    start_node: EntityId,
+    incidence: IncidenceIndex,
+    neighbors: NeighborIndex,
     target_size: int,
     max_depth: int = 2,
     rng_seed: int = 0,
     fill_random_if_needed: bool = True,
-) -> list:
+) -> TripletList:
     """
     Perform neighborhood-based subgraph sampling starting from a single node entity.
 
     Args:
         full_graph (set): The complete set of triplets in the graph.
-        start_node: Initial node entity to seed the subgraph expansion.
-        incidence (dict): Incidence index mapping entities to triplets.
-        neighbors (dict): Neighbor index mapping entities to neighbors.
+        start_node (EntityId): Initial node entity to seed the subgraph expansion.
+        incidence (IncidenceIndex): Incidence index mapping entities to triplets.
+        neighbors (NeighborIndex): Neighbor index mapping entities to neighbors.
         target_size (int): Desired size of the subgraph.
         max_depth (int): Maximum depth for neighborhood expansion.
         rng_seed (int): Random seed for reproducibility.
         fill_random_if_needed (bool): Whether to fill the subgraph randomly if under target size.
 
     Returns:
-        list: Subgraph containing the sampled triplets.
+        TripletList: Subgraph containing the sampled triplets.
     """
     
     if target_size <= 0:
@@ -279,18 +293,23 @@ def neighborhood_subgraph_sampling_by_node(
     rng.shuffle(sorted_subgraph)
     return sorted_subgraph
 
-def random_subgraph_sampling_by_node(full_graph: set, start_node:str, target_size: int, rng_seed: int=42)->list:
+def random_subgraph_sampling_by_node(
+    full_graph: TripletSet,
+    start_node: EntityId,
+    target_size: int,
+    rng_seed: int = 42,
+) -> TripletList:
     """
     Perform random subgraph sampling from single node entity over the entire graph. 
 
     Args:
         full_graph (set): The complete set of triplets in the graph.
-        start_node (str): Initial node entity.
+        start_node (EntityId): Initial node entity.
         target_size (int): Desired size of the subgraph.
         rng_seed (int): Random seed for reproducibility.
 
     Returns:
-        set: Subgraph containing the sampled triplets.
+        TripletList: Subgraph containing the sampled triplets.
     """
     if target_size <= 0:
         return []
@@ -305,30 +324,30 @@ def random_subgraph_sampling_by_node(full_graph: set, start_node:str, target_siz
     return shuffled_samples
 
 def generate_multi_answer_paths_from_source(
-    source_entity: str,
-    rel_list: List[str],
-    relation_index: Dict[str, Dict[str, List[Tuple[str, str, str]]]],
-) -> List[List[Tuple[str, str, str]]]:
+    source_entity: EntityId,
+    rel_list: RelationChain,
+    relation_index: RelationIndex,
+) -> PathList:
     """
     Generate continuous paths that start from the same source entity, follow the same
     relation sequence, and collectively yield multiple distinct final answers.
 
     Args:
-        source_entity (str): The entity to start the path from.
-        rel_list (List[str]): A list of relations that defines the required path pattern.
-        relation_index (Dict[str, Dict[str, List[Tuple[str, str, str]]]]): A nested dictionary for quick
+        source_entity (EntityId): The entity to start the path from.
+        rel_list (RelationChain): A list of relations that defines the required path pattern.
+        relation_index (RelationIndex): A nested dictionary for quick
             lookup of triplets by relation and head entity.
 
     Returns:
-        List[List[Tuple[str, str, str]]]: A list of continuous paths that begin at the given source entity
+        PathList: A list of continuous paths that begin at the given source entity
             and produce at least two distinct answers for the same relation sequence.
     """
     if not rel_list:
         return []
 
-    candidate_paths: List[List[Tuple[str, str, str]]] = []
+    candidate_paths: PathList = []
 
-    def dfs(step_idx: int, current_entity: str, current_path: List[Tuple[str, str, str]]) -> None:
+    def dfs(step_idx: int, current_entity: EntityId, current_path: Path) -> None:
         if step_idx == len(rel_list):
             candidate_paths.append(list(current_path))
             return

@@ -13,7 +13,7 @@ import os
 from collections import defaultdict
 from numbers import Number
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any
 
 from tqdm import tqdm
 
@@ -21,6 +21,15 @@ from model.llm_kgqa_navigation import NavigationLLMKGQAClient
 from model.constants import valid_models
 from utils.basic import extract_literals, load_pandas, load_triplets
 from utils.graph_utils import build_outgoing_index
+from utils.kgqa_types import (
+    EntityId,
+    PathList,
+    RelationChain,
+    StatusInfo,
+    Statistics,
+    TripletList,
+    TripletSet,
+)
 from llm_navigation_metrics import (
     aggregate_answer_metrics,
     aggregate_single_prediction_metrics,
@@ -94,7 +103,7 @@ def parse_args():
     return parser.parse_args()
 
 
-def initialize_statistics(total: int) -> Dict:
+def initialize_statistics(total: int) -> Statistics:
     return {
         'accuracy': 0,
         'running_count': 0,
@@ -121,8 +130,8 @@ def initialize_statistics(total: int) -> Dict:
 
 
 def update_stats(
-    stats_dict: Dict,
-    status_info: Dict,
+    stats_dict: Statistics,
+    status_info: StatusInfo,
     correct: bool,
     prediction: str,
     navigation_steps: int,
@@ -167,7 +176,7 @@ def average(values):
     return sum(values) / len(values) if values else 0
 
 
-def avg_dict(vals: Dict[str, object]) -> Dict[str, object]:
+def avg_dict(vals: Statistics) -> Statistics:
     out = {}
     for key, value in vals.items():
         if isinstance(value, list):
@@ -177,7 +186,7 @@ def avg_dict(vals: Dict[str, object]) -> Dict[str, object]:
     return out
 
 
-def normalize_reference_paths(value):
+def normalize_reference_paths(value: object) -> PathList:
     """Normalize a dataset Paths cell into a list of candidate triplet paths."""
     if isinstance(value, str):
         stripped = value.strip()
@@ -204,7 +213,7 @@ def normalize_reference_paths(value):
     return candidates
 
 
-def normalize_relation_chain(value):
+def normalize_relation_chain(value: object) -> RelationChain | None:
     """Normalize a Path-Key cell into a relation sequence."""
     if isinstance(value, str):
         stripped = value.strip()
@@ -219,7 +228,7 @@ def normalize_relation_chain(value):
     return None
 
 
-def normalize_answer_entities(value):
+def normalize_answer_entities(value: object) -> set[EntityId]:
     """Normalize Answer-Entity into a set without changing entity ID types."""
     if isinstance(value, str):
         stripped = value.strip()
@@ -234,7 +243,11 @@ def normalize_answer_entities(value):
     return {value} if value is not None else set()
 
 
-def best_path_fidelity_score(predicted_path, reference_paths, relation_chain):
+def best_path_fidelity_score(
+    predicted_path: TripletList,
+    reference_paths: PathList,
+    relation_chain: RelationChain | None,
+) -> StatusInfo | None:
     """Apply the benchmark multi-reference and relation-only scoring rules."""
     if not reference_paths and relation_chain is None:
         return None
@@ -245,7 +258,12 @@ def best_path_fidelity_score(predicted_path, reference_paths, relation_chain):
     )
 
 
-def validate_executed_path(predicted_path, start_entity, final_entity, all_triplets):
+def validate_executed_path(
+    predicted_path: TripletList,
+    start_entity: EntityId,
+    final_entity: EntityId | None,
+    all_triplets: TripletSet,
+) -> StatusInfo:
     current = start_entity
     violations = []
     for edge_index, edge in enumerate(predicted_path):
@@ -279,7 +297,7 @@ def validate_executed_path(predicted_path, start_entity, final_entity, all_tripl
     }
 
 
-def to_jsonable(value: Any):
+def to_jsonable(value: Any) -> Any:
     if isinstance(value, defaultdict):
         value = dict(value)
     if isinstance(value, dict):
@@ -297,7 +315,7 @@ def to_jsonable(value: Any):
     return str(value)
 
 
-def get_row_value(row, key, default=None):
+def get_row_value(row: object, key: str, default: Any = None) -> Any:
     return row[key] if key in row else default
 
 

@@ -1,24 +1,27 @@
 import json
 import re
-from typing import Any, Callable, Dict, List, Tuple
+from typing import Any
 
 from model.llm_kgqa_base import BaseLLMKGQAClient
+from utils.kgqa_types import (
+    EntityId,
+    EntityTitleMap,
+    NavigationDecision,
+    NavigationResult,
+    NavigationStatus,
+    OutgoingIndex,
+    PromptParts,
+    ReadableTriplet,
+    RelationGroups,
+    RelationId,
+    RelationTitleMap,
+    StageCallResult,
+    StageParser,
+    TraceFn,
+    Triplet,
+    TripletList,
+)
 from utils.kgqa_utils import translate_path
-
-
-EntityId = str
-RelationId = str
-Triplet = Tuple[EntityId, RelationId, EntityId]
-ReadableTriplet = Tuple[str, str, str]
-EntityTitleMap = Dict[EntityId, str]
-RelationTitleMap = Dict[RelationId, str]
-RelationGroup = Tuple[RelationId, List[Triplet]]
-NavigationDecision = Dict[str, Any]
-NavigationStatus = Dict[str, Any]
-NavigationResult = Tuple[str, str, NavigationStatus]
-TraceFn = Callable[[str], None]
-StageParser = Callable[[str], NavigationDecision]
-StageCallResult = Tuple[NavigationDecision | None, str | None, NavigationStatus, Exception | None]
 
 
 class NavigationLLMKGQAClient(BaseLLMKGQAClient):
@@ -26,7 +29,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
     @staticmethod
     def _format_navigation_history(
-        history: List[Triplet],
+        history: TripletList,
         entity_title: EntityTitleMap,
         relation_title: RelationTitleMap,
         include_history: bool = True,
@@ -35,7 +38,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         Format the traversed path for a navigation prompt.
 
         Args:
-            history (List[Triplet]): Controller-recorded KG edges traversed so far.
+            history (TripletList): Controller-recorded KG edges traversed so far.
             entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
             relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
             include_history (bool): Whether to expose the path to the LLM.
@@ -56,20 +59,20 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
     @staticmethod
     def _format_readable_path(
-        history: List[Triplet],
+        history: TripletList,
         entity_title: EntityTitleMap,
         relation_title: RelationTitleMap,
-    ) -> List[ReadableTriplet]:
+    ) -> list[ReadableTriplet]:
         """
         Convert KG ID triplets into title triplets for logs and result JSON.
 
         Args:
-            history (List[Triplet]): KG triplets represented as entity/relation IDs.
+            history (TripletList): KG triplets represented as entity/relation IDs.
             entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
             relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
 
         Returns:
-            List[ReadableTriplet]: Triplets with readable labels where available.
+            list[ReadableTriplet]: Triplets with readable labels where available.
         """
         return translate_path(history, entity_title, relation_title)
 
@@ -185,14 +188,14 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         question: str,
         start_node: EntityId,
         current_entity: EntityId,
-        history: List[Triplet],
-        actions: List[Triplet],
+        history: TripletList,
+        actions: TripletList,
         step: int,
         max_steps: int,
         entity_title: EntityTitleMap,
         relation_title: RelationTitleMap,
         include_history: bool = True,
-    ) -> Tuple[str, str]:
+    ) -> PromptParts:
         """
         Build one tuple-action graph-navigation prompt from controller-owned state.
 
@@ -200,8 +203,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             question (str): Natural-language KGQA question.
             start_node (EntityId): Entity where navigation began.
             current_entity (EntityId): Entity currently occupied by the controller.
-            history (List[Triplet]): Traversed KG edges.
-            actions (List[Triplet]): Legal outgoing edges from the current entity.
+            history (TripletList): Traversed KG edges.
+            actions (TripletList): Legal outgoing edges from the current entity.
             step (int): One-based navigation step number.
             max_steps (int): Maximum controller steps allowed.
             entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
@@ -209,7 +212,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             include_history (bool): Whether to expose traversed path memory.
 
         Returns:
-            Tuple[str, str]: Prompt text and the formatted history block used in it.
+            PromptParts: Prompt text and the formatted history block used in it.
         """
         start_entity_str = entity_title.get(start_node, start_node)
         current_entity_str = entity_title.get(current_entity, current_entity)
@@ -281,18 +284,18 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
     @staticmethod
     def _group_actions_by_relation(
-        actions: List[Triplet],
-    ) -> List[RelationGroup]:
+        actions: TripletList,
+    ) -> RelationGroups:
         """
         Group legal outgoing actions by relation for factorized navigation.
 
         Args:
-            actions (List[Triplet]): Legal outgoing triplets from the current entity.
+            actions (TripletList): Legal outgoing triplets from the current entity.
 
         Returns:
-            List[RelationGroup]: Deterministically sorted relation groups.
+            RelationGroups: Deterministically sorted relation groups.
         """
-        grouped: Dict[RelationId, List[Triplet]] = {}
+        grouped: dict[RelationId, TripletList] = {}
         for triplet in actions:
             grouped.setdefault(triplet[1], []).append(triplet)
         return [
@@ -305,14 +308,14 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         question: str,
         start_node: EntityId,
         current_entity: EntityId,
-        history: List[Triplet],
-        relation_groups: List[RelationGroup],
+        history: TripletList,
+        relation_groups: RelationGroups,
         step: int,
         max_steps: int,
         entity_title: EntityTitleMap,
         relation_title: RelationTitleMap,
         include_history: bool = True,
-    ) -> Tuple[str, str]:
+    ) -> PromptParts:
         """
         Build the relation-selection stage prompt for factorized navigation.
 
@@ -320,8 +323,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             question (str): Natural-language KGQA question.
             start_node (EntityId): Entity where navigation began.
             current_entity (EntityId): Entity currently occupied by the controller.
-            history (List[Triplet]): Traversed KG edges.
-            relation_groups (List[RelationGroup]): Legal actions grouped by relation ID.
+            history (TripletList): Traversed KG edges.
+            relation_groups (RelationGroups): Legal actions grouped by relation ID.
             step (int): One-based navigation step number.
             max_steps (int): Maximum controller steps allowed.
             entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
@@ -329,7 +332,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             include_history (bool): Whether to expose traversed path memory.
 
         Returns:
-            Tuple[str, str]: Prompt text and the formatted history block used in it.
+            PromptParts: Prompt text and the formatted history block used in it.
         """
         start_entity_str = entity_title.get(start_node, start_node)
         current_entity_str = entity_title.get(current_entity, current_entity)
@@ -387,15 +390,15 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         question: str,
         start_node: EntityId,
         current_entity: EntityId,
-        history: List[Triplet],
+        history: TripletList,
         selected_relation: RelationId,
-        relation_actions: List[Triplet],
+        relation_actions: TripletList,
         step: int,
         max_steps: int,
         entity_title: EntityTitleMap,
         relation_title: RelationTitleMap,
         include_history: bool = True,
-    ) -> Tuple[str, str]:
+    ) -> PromptParts:
         """
         Build the entity-selection stage prompt for factorized navigation.
 
@@ -403,9 +406,9 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             question (str): Natural-language KGQA question.
             start_node (EntityId): Entity where navigation began.
             current_entity (EntityId): Entity currently occupied by the controller.
-            history (List[Triplet]): Traversed KG edges.
+            history (TripletList): Traversed KG edges.
             selected_relation (RelationId): Relation chosen in the relation stage.
-            relation_actions (List[Triplet]): Candidate destination edges for the relation.
+            relation_actions (TripletList): Candidate destination edges for the relation.
             step (int): One-based navigation step number.
             max_steps (int): Maximum controller steps allowed.
             entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
@@ -413,7 +416,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             include_history (bool): Whether to expose traversed path memory.
 
         Returns:
-            Tuple[str, str]: Prompt text and the formatted history block used in it.
+            PromptParts: Prompt text and the formatted history block used in it.
         """
         start_entity_str = entity_title.get(start_node, start_node)
         current_entity_str = entity_title.get(current_entity, current_entity)
@@ -576,7 +579,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         """Conservative tokenizer-free context estimate for safety checks."""
         return max(len(prompt.split()), (len(prompt) + 3) // 4)
 
-    def prompt_fits_context(self, prompt: str) -> Tuple[bool, int, int | None]:
+    def prompt_fits_context(self, prompt: str) -> tuple[bool, int, int | None]:
         """
         Check whether a prompt is likely to fit in the configured model context window.
 
@@ -584,7 +587,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             prompt (str): Prompt text to estimate.
 
         Returns:
-            Tuple[bool, int, int | None]: Fits flag, estimated prompt tokens, and context limit if known.
+            tuple[bool, int, int | None]: Fits flag, estimated prompt tokens, and context limit if known.
         """
         estimated_tokens = self.estimate_prompt_tokens(prompt)
         context_window = getattr(self, "context_window", None)
@@ -601,7 +604,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         current_entity: EntityId,
         aggregate_status: NavigationStatus,
         trace: TraceFn | None = None,
-    ) -> Tuple[str | None, NavigationStatus]:
+    ) -> tuple[str | None, NavigationStatus]:
         """
         Execute one navigation prompt and record raw output plus usage metadata.
 
@@ -615,7 +618,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             trace (TraceFn | None): Optional sink for verbose prompt/output traces.
 
         Returns:
-            Tuple[str | None, NavigationStatus]: Raw response content and call status.
+            tuple[str | None, NavigationStatus]: Raw response content and call status.
         """
         if trace is not None:
             trace(
@@ -671,7 +674,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         self,
         question: str,
         start_node: EntityId,
-        outgoing_index: Dict[EntityId, List[Triplet]],
+        outgoing_index: OutgoingIndex,
         entity_title: EntityTitleMap,
         relation_title: RelationTitleMap,
         max_steps: int = 4,
@@ -689,7 +692,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         Args:
             question (str): Natural-language KGQA question.
             start_node (EntityId): Entity where navigation begins.
-            outgoing_index (Dict[EntityId, List[Triplet]]): Legal outgoing KG edges by source entity.
+            outgoing_index (OutgoingIndex): Legal outgoing KG edges by source entity.
             entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
             relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
             max_steps (int): Maximum controller steps before stopping at the current entity.
@@ -723,7 +726,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             raise ValueError("max_parse_retries must be non-negative.")
 
         current_entity = start_node
-        history: List[Triplet] = []
+        history: TripletList = []
         include_history = memory_approach == "full"
         aggregate_status = {
             "status": "success",
@@ -939,7 +942,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             step: int,
             strategy: str,
             current_before: EntityId,
-            actions: List[Triplet],
+            actions: TripletList,
             selected_triplet: Triplet,
             selected_action: int,
             stop: bool,

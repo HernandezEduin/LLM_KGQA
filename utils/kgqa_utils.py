@@ -1,17 +1,28 @@
 import re
-from typing import List, Tuple, Union
+from typing import List, Union
 
-def translate_path(triplet_path: List[Tuple[str, str, str]], entity_title: dict, relation_title: dict) -> List[Tuple[str, str, str]]:
+from utils.kgqa_types import (
+    EntityTitleMap,
+    ReadableTriplet,
+    RelationTitleMap,
+    TripletList,
+)
+
+def translate_path(
+    triplet_path: TripletList,
+    entity_title: EntityTitleMap,
+    relation_title: RelationTitleMap,
+) -> list[ReadableTriplet]:
     """
     Translate triplet paths into human-readable format using entity and relation titles.
 
     Args:
-        triplet_path (List[Tuple[str, str, str]]): List of triplets (head, relation, tail).
-        entity_title (dict): Mapping of entity IDs to titles.
-        relation_title (dict): Mapping of relation IDs to titles.
+        triplet_path (TripletList): List of triplets (head, relation, tail).
+        entity_title (EntityTitleMap): Mapping of entity IDs to titles.
+        relation_title (RelationTitleMap): Mapping of relation IDs to titles.
 
     Returns:
-        List[Tuple[str, str, str]]: Human-readable triplet paths.
+        list[ReadableTriplet]: Human-readable triplet paths.
     """
     readable_path = []
     for head, relation, tail in triplet_path:

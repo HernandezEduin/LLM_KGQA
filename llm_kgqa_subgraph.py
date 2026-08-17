@@ -30,7 +30,8 @@ from utils.graph_utils import (
 )
 
 from collections import defaultdict
-from typing import Dict
+
+from utils.kgqa_types import Statistics, StatusInfo
 
 def parse_args():
     """
@@ -104,7 +105,7 @@ The main block of the script handles the following:
 4. Iteratively processing batches of questions, performing subgraph sampling, and evaluating predictions.
 5. Saving the results to a JSON file.
 """
-def initialize_statistics(total: int) -> Dict:
+def initialize_statistics(total: int) -> Statistics:
     return {
         'accuracy': 0,
         'running_count': 0,
@@ -124,8 +125,8 @@ def initialize_statistics(total: int) -> Dict:
     }
 
 def update_stats(
-    stats_dict: Dict, 
-    status_info: Dict, 
+    stats_dict: Statistics, 
+    status_info: StatusInfo, 
     result: str, 
     full_pred: str, 
     sub_graph_size: int,
@@ -153,7 +154,7 @@ def update_stats(
 def average(lst):
     return sum(lst) / len(lst) if lst else 0
 
-def avg_dict(vals: Dict[str, object]) -> Dict[str, float]:
+def avg_dict(vals: Statistics) -> Statistics:
     """
     Averages the values in a dictionary. If a value is a list, it computes the average of the list.
     """
