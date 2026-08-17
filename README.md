@@ -138,23 +138,37 @@ This project is licensed under the Academic License.
 
 ## TODO
 
-- [ ] Double-check all LLMs use deterministic subgraph prompts when seeded.
-- [x] Set seed for LLM via backend.
-- [ ] Add an option for bulk/batch chat functionality.
-- [x] Enhance chat timeout and retry mechanisms to handle longer subgraphs.
-- [ ] Add functionality that converts triplets into sentences.
-- [x] Add prompt token estimation.
-- [x] Add context-window configuration.
+### Navigation
+
+- [ ] Implement `--prompting-approach io` and `--prompting-approach one-shot`; add a clean extension point for future few-shot prompts.
+- [ ] Add graph directionality options (`outgoing`, `incoming`, `bidirectional`) and propagate the setting through action indexing, path validation, metrics, and result config.
+- [ ] Add configurable `--max-actions` selection policies, such as `first`, seeded random sampling, and question-aware ranking.
+- [ ] Record both prompt-local option IDs and original sorted graph-action IDs in episode records, especially for truncated tuple prompts and factorized relation-action prompts.
+- [ ] Add adaptive context-window handling before termination, such as reducing shown actions or switching from tuple to factorized prompts when possible.
+- [ ] Build a human navigation GUI for manually stepping through the graph and answering questions.
+- [x] Reuse the standard action prompt for factorized second-stage navigation over the selected relation's edges.
+
+### Prompting And LLM Calls
+
+- [ ] Add shared one-shot and few-shot prompt templates for subgraph and navigation tasks.
 - [ ] Add zero-context QA evaluation without graph context.
-- [ ] Manually revise path-fidelity metrics.
-- [ ] Ensure PED and F1_SG accept multiple answers for a single question.
-- [x] Support more general datasets with optional entity/relation title mappings.
-- [x] Create a parent class and child clients for subgraph and iterative navigation.
-- [ ] Include a human navigation GUI for manually navigating the knowledge graph.
-- [ ] Double-check that LLM cancellation still works.
-- [ ] Navigation: Implement the non-zero-shot modes currently exposed by `--prompting-approach` (`io`, `one-shot`, and future few-shot variants).
-- [ ] Navigation: Add graph directionality options (`outgoing`, `incoming`, `bidirectional`) and update action indexing, path validation, and result config accordingly.
-- [ ] Navigation: Add action selection policies for `--max-actions`, such as seeded random sampling or question-aware ranking, instead of always truncating to the first `N` sorted actions.
-- [ ] Navigation: Store both prompt-local option IDs and original sorted graph-action IDs in episode records, especially for truncated tuple prompts and factorized relation-action prompts.
-- [x] Navigation: Remove or rewire the obsolete entity-stage prompt/parser now that factorized navigation reuses the tuple action prompt for the selected relation.
-- [ ] Add one-shot and few-shot prompting options for both subgraph and navigation tasks.
+- [ ] Add an optional triplet-to-sentence prompt format for subgraph evidence.
+- [ ] Add bulk/batch chat execution where supported by the backend.
+- [ ] Verify LLM cancellation and model unload behavior across normal completion, timeout, and interruption.
+- [x] Set LLM seed through the backend.
+- [x] Add timeout and retry handling for long LLM calls.
+- [x] Add prompt token estimation and context-window configuration.
+
+### Metrics And Evaluation
+
+- [ ] Revisit path-fidelity metrics and document the intended PED, RED, F1_SG, and F1_REL behavior.
+- [ ] Ensure PED and F1_SG correctly support multiple gold answers and multiple valid evidence paths.
+- [ ] Add regression tests for navigation termination reasons, parse retries, max-action truncation, and context-window failures.
+- [ ] Double-check deterministic subgraph prompts across models when seeds are fixed.
+
+### Data And Architecture
+
+- [ ] Add dataset compatibility checks for required columns and optional fields before launching long runs.
+- [ ] Add support notes or adapters for additional KGQA datasets such as MetaQA and PathQuestion.
+- [x] Support datasets with optional entity/relation title mappings.
+- [x] Split shared LLM client logic from subgraph and navigation task clients.
