@@ -2,7 +2,7 @@ import json
 import re
 from typing import Any, Dict, Tuple
 
-from model.llm_kgqa_base import BaseLLMKGQAClient
+from model.base_llm_client import BaseLLMKGQAClient
 from utils.kgqa_types import (
     EntityId,
     EntityTitleMap,

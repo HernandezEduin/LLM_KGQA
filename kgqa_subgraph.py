@@ -14,7 +14,7 @@ import pandas as pd
 from tqdm import tqdm
 import warnings
 
-from model.llm_kgqa_subgraph import SubgraphLLMKGQAClient
+from model.subgraph_llm_client import SubgraphLLMKGQAClient
 from model.constants import valid_models
 
 from utils.basic import load_triplets, load_pandas, extract_literals

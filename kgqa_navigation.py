@@ -17,7 +17,7 @@ from typing import Any
 
 from tqdm import tqdm
 
-from model.llm_kgqa_navigation import NavigationLLMKGQAClient
+from model.navigation_llm_client import NavigationLLMKGQAClient
 from model.constants import valid_models
 from utils.basic import extract_literals, load_pandas, load_triplets
 from utils.graph_utils import build_outgoing_index
