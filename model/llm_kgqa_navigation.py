@@ -1,9 +1,24 @@
 import json
 import re
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Tuple
 
 from model.llm_kgqa_base import BaseLLMKGQAClient
 from utils.kgqa_utils import translate_path
+
+
+EntityId = str
+RelationId = str
+Triplet = Tuple[EntityId, RelationId, EntityId]
+ReadableTriplet = Tuple[str, str, str]
+EntityTitleMap = Dict[EntityId, str]
+RelationTitleMap = Dict[RelationId, str]
+RelationGroup = Tuple[RelationId, List[Triplet]]
+NavigationDecision = Dict[str, Any]
+NavigationStatus = Dict[str, Any]
+NavigationResult = Tuple[str, str, NavigationStatus]
+TraceFn = Callable[[str], None]
+StageParser = Callable[[str], NavigationDecision]
+StageCallResult = Tuple[NavigationDecision | None, str | None, NavigationStatus, Exception | None]
 
 
 class NavigationLLMKGQAClient(BaseLLMKGQAClient):
@@ -11,11 +26,23 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
     @staticmethod
     def _format_navigation_history(
-        history: List[Tuple[str, str, str]],
-        entity_title: dict,
-        relation_title: dict,
+        history: List[Triplet],
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
         include_history: bool = True,
     ) -> str:
+        """
+        Format the traversed path for a navigation prompt.
+
+        Args:
+            history (List[Triplet]): Controller-recorded KG edges traversed so far.
+            entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
+            relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
+            include_history (bool): Whether to expose the path to the LLM.
+
+        Returns:
+            str: Prompt-ready history text, or a marker when history is hidden/empty.
+        """
         if not include_history:
             return "  (not shown)"
 
@@ -29,14 +56,34 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
     @staticmethod
     def _format_readable_path(
-        history: List[Tuple[str, str, str]],
-        entity_title: dict,
-        relation_title: dict,
-    ) -> List[Tuple[str, str, str]]:
+        history: List[Triplet],
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
+    ) -> List[ReadableTriplet]:
+        """
+        Convert KG ID triplets into title triplets for logs and result JSON.
+
+        Args:
+            history (List[Triplet]): KG triplets represented as entity/relation IDs.
+            entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
+            relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
+
+        Returns:
+            List[ReadableTriplet]: Triplets with readable labels where available.
+        """
         return translate_path(history, entity_title, relation_title)
 
     @staticmethod
     def _strip_optional_json_fence(content: str) -> str:
+        """
+        Remove a single optional Markdown JSON fence from model output.
+
+        Args:
+            content (str): Raw LLM response text.
+
+        Returns:
+            str: Bare JSON candidate text.
+        """
         text = content.strip()
         fence_match = re.fullmatch(
             r"```(?:json)?\s*(.*?)\s*```",
@@ -48,7 +95,19 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         return text
 
     @classmethod
-    def _parse_json_object(cls, content: str) -> dict:
+    def _parse_json_object(cls, content: str) -> NavigationDecision:
+        """
+        Parse a strict JSON object from a navigation-stage response.
+
+        Args:
+            content (str): Raw LLM response text.
+
+        Returns:
+            NavigationDecision: Parsed JSON object.
+
+        Raises:
+            ValueError: If the response is not text, not JSON, or not an object.
+        """
         if not isinstance(content, str):
             raise ValueError("Navigation response must be text.")
         text = cls._strip_optional_json_fence(content)
@@ -61,7 +120,22 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         return decision
 
     @staticmethod
-    def _require_exact_keys(decision: dict, expected_keys: set[str], schema_name: str) -> None:
+    def _require_exact_keys(
+        decision: NavigationDecision,
+        expected_keys: set[str],
+        schema_name: str,
+    ) -> None:
+        """
+        Enforce an exact response schema for a navigation decision.
+
+        Args:
+            decision (NavigationDecision): Parsed model response.
+            expected_keys (set[str]): Required key set, with no extras allowed.
+            schema_name (str): Human-readable schema label for error messages.
+
+        Raises:
+            ValueError: If required keys are missing or extra keys are present.
+        """
         observed_keys = set(decision.keys())
         if observed_keys != expected_keys:
             raise ValueError(
@@ -71,12 +145,33 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
     @staticmethod
     def _require_bool(value: Any, field_name: str) -> bool:
+        """
+        Validate that a response field is a JSON boolean.
+
+        Args:
+            value (Any): Field value to validate.
+            field_name (str): Field name for error messages.
+
+        Returns:
+            bool: The validated boolean value.
+        """
         if type(value) is not bool:
             raise ValueError(f"{field_name} must be a boolean.")
         return value
 
     @staticmethod
     def _require_index(value: Any, field_name: str, option_count: int) -> int:
+        """
+        Validate that a response field is an in-range integer option ID.
+
+        Args:
+            value (Any): Field value to validate.
+            field_name (str): Field name for error messages.
+            option_count (int): Number of options presented to the LLM.
+
+        Returns:
+            int: The validated zero-based option index.
+        """
         if type(value) is not int:
             raise ValueError(f"{field_name} must be an integer ID.")
         if value < 0 or value >= option_count:
@@ -88,17 +183,34 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
     def prepare_navigation_prompt(
         self,
         question: str,
-        start_node: str,
-        current_entity: str,
-        history: List[Tuple[str, str, str]],
-        actions: List[Tuple[str, str, str]],
+        start_node: EntityId,
+        current_entity: EntityId,
+        history: List[Triplet],
+        actions: List[Triplet],
         step: int,
         max_steps: int,
-        entity_title: dict,
-        relation_title: dict,
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
         include_history: bool = True,
     ) -> Tuple[str, str]:
-        """Build one tuple-action graph-navigation prompt from controller-owned state."""
+        """
+        Build one tuple-action graph-navigation prompt from controller-owned state.
+
+        Args:
+            question (str): Natural-language KGQA question.
+            start_node (EntityId): Entity where navigation began.
+            current_entity (EntityId): Entity currently occupied by the controller.
+            history (List[Triplet]): Traversed KG edges.
+            actions (List[Triplet]): Legal outgoing edges from the current entity.
+            step (int): One-based navigation step number.
+            max_steps (int): Maximum controller steps allowed.
+            entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
+            relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
+            include_history (bool): Whether to expose traversed path memory.
+
+        Returns:
+            Tuple[str, str]: Prompt text and the formatted history block used in it.
+        """
         start_entity_str = entity_title.get(start_node, start_node)
         current_entity_str = entity_title.get(current_entity, current_entity)
         history_str = self._format_navigation_history(
@@ -169,9 +281,18 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
     @staticmethod
     def _group_actions_by_relation(
-        actions: List[Tuple[str, str, str]],
-    ) -> List[Tuple[str, List[Tuple[str, str, str]]]]:
-        grouped: Dict[str, List[Tuple[str, str, str]]] = {}
+        actions: List[Triplet],
+    ) -> List[RelationGroup]:
+        """
+        Group legal outgoing actions by relation for factorized navigation.
+
+        Args:
+            actions (List[Triplet]): Legal outgoing triplets from the current entity.
+
+        Returns:
+            List[RelationGroup]: Deterministically sorted relation groups.
+        """
+        grouped: Dict[RelationId, List[Triplet]] = {}
         for triplet in actions:
             grouped.setdefault(triplet[1], []).append(triplet)
         return [
@@ -182,17 +303,34 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
     def prepare_relation_navigation_prompt(
         self,
         question: str,
-        start_node: str,
-        current_entity: str,
-        history: List[Tuple[str, str, str]],
-        relation_groups: List[Tuple[str, List[Tuple[str, str, str]]]],
+        start_node: EntityId,
+        current_entity: EntityId,
+        history: List[Triplet],
+        relation_groups: List[RelationGroup],
         step: int,
         max_steps: int,
-        entity_title: dict,
-        relation_title: dict,
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
         include_history: bool = True,
     ) -> Tuple[str, str]:
-        """Build the relation-selection stage prompt for factorized navigation."""
+        """
+        Build the relation-selection stage prompt for factorized navigation.
+
+        Args:
+            question (str): Natural-language KGQA question.
+            start_node (EntityId): Entity where navigation began.
+            current_entity (EntityId): Entity currently occupied by the controller.
+            history (List[Triplet]): Traversed KG edges.
+            relation_groups (List[RelationGroup]): Legal actions grouped by relation ID.
+            step (int): One-based navigation step number.
+            max_steps (int): Maximum controller steps allowed.
+            entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
+            relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
+            include_history (bool): Whether to expose traversed path memory.
+
+        Returns:
+            Tuple[str, str]: Prompt text and the formatted history block used in it.
+        """
         start_entity_str = entity_title.get(start_node, start_node)
         current_entity_str = entity_title.get(current_entity, current_entity)
         history_str = self._format_navigation_history(
@@ -247,18 +385,36 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
     def prepare_entity_navigation_prompt(
         self,
         question: str,
-        start_node: str,
-        current_entity: str,
-        history: List[Tuple[str, str, str]],
-        selected_relation: str,
-        relation_actions: List[Tuple[str, str, str]],
+        start_node: EntityId,
+        current_entity: EntityId,
+        history: List[Triplet],
+        selected_relation: RelationId,
+        relation_actions: List[Triplet],
         step: int,
         max_steps: int,
-        entity_title: dict,
-        relation_title: dict,
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
         include_history: bool = True,
     ) -> Tuple[str, str]:
-        """Build the entity-selection stage prompt for factorized navigation."""
+        """
+        Build the entity-selection stage prompt for factorized navigation.
+
+        Args:
+            question (str): Natural-language KGQA question.
+            start_node (EntityId): Entity where navigation began.
+            current_entity (EntityId): Entity currently occupied by the controller.
+            history (List[Triplet]): Traversed KG edges.
+            selected_relation (RelationId): Relation chosen in the relation stage.
+            relation_actions (List[Triplet]): Candidate destination edges for the relation.
+            step (int): One-based navigation step number.
+            max_steps (int): Maximum controller steps allowed.
+            entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
+            relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
+            include_history (bool): Whether to expose traversed path memory.
+
+        Returns:
+            Tuple[str, str]: Prompt text and the formatted history block used in it.
+        """
         start_entity_str = entity_title.get(start_node, start_node)
         current_entity_str = entity_title.get(current_entity, current_entity)
         relation_str = relation_title.get(selected_relation, selected_relation)
@@ -315,8 +471,20 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         return template, history_str
 
     @classmethod
-    def parse_navigation_decision(cls, content: str, num_actions: int) -> dict:
-        """Parse and strictly validate a tuple-action navigation response."""
+    def parse_navigation_decision(cls, content: str, num_actions: int) -> NavigationDecision:
+        """
+        Parse and strictly validate a tuple-action navigation response.
+
+        Args:
+            content (str): Raw LLM response text.
+            num_actions (int): Number of tuple actions shown in the prompt.
+
+        Returns:
+            NavigationDecision: Normalized {"action": int | None, "stop": bool} decision.
+
+        Raises:
+            ValueError: If JSON, schema, boolean, or action-index validation fails.
+        """
         decision = cls._parse_json_object(content)
         cls._require_exact_keys(decision, {"action", "stop"}, "Tuple navigation")
         stop = cls._require_bool(decision["stop"], "stop")
@@ -329,8 +497,20 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         return {"action": action_id, "stop": stop}
 
     @classmethod
-    def parse_relation_decision(cls, content: str, num_relations: int) -> dict:
-        """Parse and strictly validate a factorized relation-stage response."""
+    def parse_relation_decision(cls, content: str, num_relations: int) -> NavigationDecision:
+        """
+        Parse and strictly validate a factorized relation-stage response.
+
+        Args:
+            content (str): Raw LLM response text.
+            num_relations (int): Number of relation options shown in the prompt.
+
+        Returns:
+            NavigationDecision: Normalized {"relation": int | None, "stop": bool} decision.
+
+        Raises:
+            ValueError: If JSON, schema, boolean, or relation-index validation fails.
+        """
         decision = cls._parse_json_object(content)
         cls._require_exact_keys(decision, {"relation", "stop"}, "Relation navigation")
         stop = cls._require_bool(decision["stop"], "stop")
@@ -345,15 +525,38 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         return {"relation": relation_id, "stop": stop}
 
     @classmethod
-    def parse_entity_decision(cls, content: str, num_entities: int) -> dict:
-        """Parse and strictly validate a factorized entity-stage response."""
+    def parse_entity_decision(cls, content: str, num_entities: int) -> NavigationDecision:
+        """
+        Parse and strictly validate a factorized entity-stage response.
+
+        Args:
+            content (str): Raw LLM response text.
+            num_entities (int): Number of destination options shown in the prompt.
+
+        Returns:
+            NavigationDecision: Normalized {"entity": int, "stop": bool} decision.
+
+        Raises:
+            ValueError: If JSON, schema, boolean, or entity-index validation fails.
+        """
         decision = cls._parse_json_object(content)
         cls._require_exact_keys(decision, {"entity", "stop"}, "Entity navigation")
         stop = cls._require_bool(decision["stop"], "stop")
         entity_id = cls._require_index(decision["entity"], "entity", num_entities)
         return {"entity": entity_id, "stop": stop}
 
-    def _accumulate_navigation_usage(self, aggregate_status: dict, status_info: dict) -> None:
+    def _accumulate_navigation_usage(
+        self,
+        aggregate_status: NavigationStatus,
+        status_info: NavigationStatus,
+    ) -> None:
+        """
+        Add token, latency, and throughput fields from one LLM call into the run status.
+
+        Args:
+            aggregate_status (NavigationStatus): Mutable status record for the full navigation run.
+            status_info (NavigationStatus): Normalized status/usage record for one model call.
+        """
         for field in (
             "prompt_tokens",
             "response_tokens",
@@ -374,6 +577,15 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         return max(len(prompt.split()), (len(prompt) + 3) // 4)
 
     def prompt_fits_context(self, prompt: str) -> Tuple[bool, int, int | None]:
+        """
+        Check whether a prompt is likely to fit in the configured model context window.
+
+        Args:
+            prompt (str): Prompt text to estimate.
+
+        Returns:
+            Tuple[bool, int, int | None]: Fits flag, estimated prompt tokens, and context limit if known.
+        """
         estimated_tokens = self.estimate_prompt_tokens(prompt)
         context_window = getattr(self, "context_window", None)
         if context_window is None:
@@ -386,10 +598,25 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         stage: str,
         strategy: str,
         step: int,
-        current_entity: str,
-        aggregate_status: dict,
-        trace=None,
-    ) -> Tuple[str | None, dict]:
+        current_entity: EntityId,
+        aggregate_status: NavigationStatus,
+        trace: TraceFn | None = None,
+    ) -> Tuple[str | None, NavigationStatus]:
+        """
+        Execute one navigation prompt and record raw output plus usage metadata.
+
+        Args:
+            prompt (str): Prompt for the tuple, relation, or entity stage.
+            stage (str): Navigation stage label for logs/results.
+            strategy (str): Active navigation strategy, e.g. tuple or factorized.
+            step (int): One-based navigation step number.
+            current_entity (EntityId): Entity occupied before this stage call.
+            aggregate_status (NavigationStatus): Mutable run-level status record.
+            trace (TraceFn | None): Optional sink for verbose prompt/output traces.
+
+        Returns:
+            Tuple[str | None, NavigationStatus]: Raw response content and call status.
+        """
         if trace is not None:
             trace(
                 f"\n=== Navigation step {step} ({strategy}/{stage}) ===\n"
@@ -443,10 +670,10 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
     def process_navigation_question(
         self,
         question: str,
-        start_node: str,
-        outgoing_index: dict,
-        entity_title: dict,
-        relation_title: dict,
+        start_node: EntityId,
+        outgoing_index: Dict[EntityId, List[Triplet]],
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
         max_steps: int = 4,
         max_actions: int | None = None,
         navigation_approach: str = "tuple",
@@ -454,9 +681,29 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         prompting_approach: str = "zero-shot",
         hybrid_threshold: int = 50,
         max_parse_retries: int = 1,
-        trace=None,
-    ) -> Tuple[str, str, dict]:
-        """Navigate from ``start_node`` and use the terminal KG entity as the answer."""
+        trace: TraceFn | None = None,
+    ) -> NavigationResult:
+        """
+        Navigate from a start node and use the terminal KG entity as the prediction.
+
+        Args:
+            question (str): Natural-language KGQA question.
+            start_node (EntityId): Entity where navigation begins.
+            outgoing_index (Dict[EntityId, List[Triplet]]): Legal outgoing KG edges by source entity.
+            entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
+            relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
+            max_steps (int): Maximum controller steps before stopping at the current entity.
+            max_actions (int | None): Optional hard cap for listed options; no legal options are discarded.
+            navigation_approach (str): One of tuple, factorized, or hybrid.
+            memory_approach (str): Whether to expose full path memory or hide it from prompts.
+            prompting_approach (str): Prompting mode; currently zero-shot only.
+            hybrid_threshold (int): Tuple/factorized switch point for hybrid navigation.
+            max_parse_retries (int): Number of schema-correction retries after invalid JSON.
+            trace (TraceFn | None): Optional sink for verbose prompt/output traces.
+
+        Returns:
+            NavigationResult: Prediction, readable traversed path text, and run status metadata.
+        """
         if max_steps < 0:
             raise ValueError("max_steps must be non-negative.")
         if max_actions is not None and max_actions < 1:
@@ -476,7 +723,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             raise ValueError("max_parse_retries must be non-negative.")
 
         current_entity = start_node
-        history: List[Tuple[str, str, str]] = []
+        history: List[Triplet] = []
         include_history = memory_approach == "full"
         aggregate_status = {
             "status": "success",
@@ -522,9 +769,10 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         def finalize(
             status: str,
             termination_reason: str,
-            final_entity: str | None,
+            final_entity: EntityId | None,
             message: str,
-        ) -> Tuple[str, str, dict]:
+        ) -> NavigationResult:
+            # Centralize terminal status construction so every exit path reports the same schema.
             aggregate_status.update({
                 "status": status,
                 "termination_reason": termination_reason,
@@ -555,7 +803,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 )
             return prediction, final_history_text(), aggregate_status
 
-        def fail_stage(stage_status: dict, termination_reason: str) -> Tuple[str, str, dict]:
+        def fail_stage(stage_status: NavigationStatus, termination_reason: str) -> NavigationResult:
             status = stage_status.get("status", "error")
             if status not in {"timeout", "success"}:
                 status = "error"
@@ -573,7 +821,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             content: str,
             exc: Exception,
             attempt: int,
-        ) -> dict:
+        ) -> NavigationStatus:
             error_record = {
                 "step": step,
                 "stage": stage,
@@ -585,7 +833,13 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             aggregate_status["parse_validation_errors"].append(error_record)
             return error_record
 
-        def fail_parse(step: int, stage: str, strategy: str, content: str, exc: Exception):
+        def fail_parse(
+            step: int,
+            stage: str,
+            strategy: str,
+            content: str,
+            exc: Exception,
+        ) -> NavigationResult:
             return finalize(
                 status="error",
                 termination_reason="invalid_output",
@@ -604,7 +858,13 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 "markdown, prose, or any keys outside the required schema.\n"
             )
 
-        def call_parse_stage(prompt: str, stage: str, strategy: str, parser):
+        def call_parse_stage(
+            prompt: str,
+            stage: str,
+            strategy: str,
+            parser: StageParser,
+        ) -> StageCallResult:
+            # Retries are used only to repair malformed model output for the same decision.
             current_prompt = prompt
             last_content = None
             last_exc = None
@@ -632,7 +892,12 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     current_prompt = make_correction_prompt(prompt, stage, content, exc)
             return None, last_content, {"status": "parse_error", "message": str(last_exc)}, last_exc
 
-        def fail_max_options(step: int, strategy: str, option_kind: str, option_count: int):
+        def fail_max_options(
+            step: int,
+            strategy: str,
+            option_kind: str,
+            option_count: int,
+        ) -> NavigationResult:
             aggregate_status["max_actions_exceeded"] = True
             aggregate_status["max_actions_kind"] = option_kind
             aggregate_status["max_actions_count"] = option_count
@@ -646,7 +911,12 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 ),
             )
 
-        def fail_context_window(step: int, stage: str, strategy: str, prompt: str):
+        def fail_context_window(
+            step: int,
+            stage: str,
+            strategy: str,
+            prompt: str,
+        ) -> NavigationResult | None:
             fits, estimated_tokens, context_window = self.prompt_fits_context(prompt)
             if fits:
                 return None
@@ -668,12 +938,12 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         def record_move(
             step: int,
             strategy: str,
-            current_before: str,
-            actions: List[Tuple[str, str, str]],
-            selected_triplet: Tuple[str, str, str],
+            current_before: EntityId,
+            actions: List[Triplet],
+            selected_triplet: Triplet,
             selected_action: int,
             stop: bool,
-            extra: dict | None = None,
+            extra: NavigationStatus | None = None,
         ) -> None:
             readable_move = translate_path([selected_triplet], entity_title, relation_title)[0]
             record = {
@@ -728,6 +998,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             current_before = current_entity
 
             if strategy == "tuple":
+                # Tuple navigation asks the LLM to choose directly from full outgoing edges.
                 if max_actions is not None and neighborhood_size > max_actions:
                     return fail_max_options(step, strategy, "tuple_action", neighborhood_size)
 
@@ -808,6 +1079,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     )
                 continue
 
+            # Factorized navigation first chooses a relation, then a destination among that relation's edges.
             relation_groups = self._group_actions_by_relation(actions)
             if max_actions is not None and len(relation_groups) > max_actions:
                 return fail_max_options(step, strategy, "relation", len(relation_groups))
