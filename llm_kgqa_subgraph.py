@@ -1,6 +1,7 @@
 """
 This script is designed for running Knowledge Graph Question Answering (KGQA) experiments using generic Large Language Models (LLMs).
 It supports subgraph sampling, evidence-based reasoning, and batch processing of questions.
+This is a subgraph-at-once QA pipeline, where the entire subgraph is provided to the LLM for reasoning.
 """
 
 import argparse
