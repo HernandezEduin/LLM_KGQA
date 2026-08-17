@@ -62,4 +62,6 @@ This project is licensed under the Academic License.
 - [ ] Manually revise the Path-Fidelity Metrics.
 - [ ] Ensure the PED and F1_SG accept multiple answers for a single question. Reconstruct the path on-the-fly to calculate the metrics.
 - [ ] Allow compatibility with other datasets like Kinship, MetaQA, PathQuestion, and more. This includes adding support for different graph structures and question formats.
-- [ ] Create a parent class for LLM_KGQA and child classes for each task: subgraph and iterative navigation.
+- [x] Create a parent class for LLM_KGQA and child classes for each task: subgraph and iterative navigation.
+- [ ] Include a human navigation GUI for the iterative navigation task, allowing users to manually navigate through the knowledge graph and answer questions.
+- [ ] Double check that the LLM cancelling still works.
