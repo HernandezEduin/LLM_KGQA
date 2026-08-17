@@ -23,6 +23,7 @@ from utils.basic import extract_literals, load_pandas, load_triplets
 from utils.graph_utils import build_outgoing_index
 from utils.kgqa_types import (
     EntityId,
+    MetricScores,
     PathList,
     RelationChain,
     StatusInfo,
@@ -30,7 +31,7 @@ from utils.kgqa_types import (
     TripletList,
     TripletSet,
 )
-from llm_navigation_metrics import (
+from utils.kgqa_navigation_metrics import (
     aggregate_answer_metrics,
     aggregate_single_prediction_metrics,
     score_path_fidelity_against_references,
@@ -247,7 +248,7 @@ def best_path_fidelity_score(
     predicted_path: TripletList,
     reference_paths: PathList,
     relation_chain: RelationChain | None,
-) -> StatusInfo | None:
+) -> MetricScores | None:
     """Apply the benchmark multi-reference and relation-only scoring rules."""
     if not reference_paths and relation_chain is None:
         return None

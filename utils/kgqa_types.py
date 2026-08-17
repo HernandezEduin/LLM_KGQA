@@ -40,6 +40,12 @@ StatusInfo = Dict[str, Any]
 Statistics = Dict[str, Any]
 
 
+# Metric score records
+MetricValue = float | None
+MetricScores = Dict[str, MetricValue]
+AggregateMetricScores = Dict[str, MetricValue | int]
+
+
 # Prompt and client result tuples
 PromptParts = Tuple[str, str]
 NavigationDecision = Dict[str, Any]
