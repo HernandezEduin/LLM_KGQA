@@ -1153,34 +1153,55 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 relation_actions,
             )
 
-            entity_prompt, _ = self.prepare_entity_navigation_prompt(
+            action_prompt, _ = self.prepare_navigation_prompt(
                 question=question,
                 start_node=start_node,
                 current_entity=current_entity,
                 history=history,
-                selected_relation=selected_relation,
-                relation_actions=prompted_relation_actions,
+                actions=prompted_relation_actions,
                 step=step,
                 max_steps=max_steps,
                 entity_title=entity_title,
                 relation_title=relation_title,
                 include_history=include_history,
             )
-            context_failure = fail_context_window(step, "entity", strategy, entity_prompt)
+            context_failure = fail_context_window(step, "relation_action", strategy, action_prompt)
             if context_failure is not None:
                 return context_failure
-            entity_decision, entity_content, entity_status, parse_exc = call_parse_stage(
-                entity_prompt,
-                stage="entity",
+            action_decision, action_content, action_status, parse_exc = call_parse_stage(
+                action_prompt,
+                stage="relation_action",
                 strategy=strategy,
-                parser=lambda raw: self.parse_entity_decision(raw, len(prompted_relation_actions)),
+                parser=lambda raw: self.parse_navigation_decision(raw, len(prompted_relation_actions)),
             )
-            if entity_status.get("status") != "success" or entity_content is None:
+            if action_status.get("status") != "success" or action_content is None:
                 if parse_exc is not None:
-                    return fail_parse(step, "entity", strategy, entity_content or "", parse_exc)
-                return fail_stage(entity_status, "api_error")
+                    return fail_parse(step, "relation_action", strategy, action_content or "", parse_exc)
+                return fail_stage(action_status, "api_error")
 
-            selected_triplet = prompted_relation_actions[entity_decision["entity"]]
+            action_id = action_decision["action"]
+            if action_id is None:
+                aggregate_status["decision_records"].append({
+                    "step": step,
+                    "strategy": strategy,
+                    "current_entity": current_before,
+                    "neighborhood_size": neighborhood_size,
+                    "selected_action": None,
+                    "selected_relation": None,
+                    "selected_destination": current_before,
+                    "stop": True,
+                    "relation_choice": relation_id,
+                    "raw_relation_output": relation_content,
+                    "raw_action_output": action_content,
+                })
+                return finalize(
+                    status="success",
+                    termination_reason="llm_stop",
+                    final_entity=current_entity,
+                    message="LLM stopped at current entity after relation selection.",
+                )
+
+            selected_triplet = prompted_relation_actions[action_id]
             selected_action = actions.index(selected_triplet)
             history.append(selected_triplet)
             current_entity = selected_triplet[2]
@@ -1192,24 +1213,24 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 actions=actions,
                 selected_triplet=selected_triplet,
                 selected_action=selected_action,
-                stop=entity_decision["stop"],
+                stop=action_decision["stop"],
                 extra={
                     "relation_choice": relation_id,
-                    "entity_choice": entity_decision["entity"],
+                    "relation_action_choice": action_id,
                     "raw_relation_output": relation_content,
-                    "raw_entity_output": entity_content,
+                    "raw_action_output": action_content,
                 },
             )
             if trace is not None:
                 readable_move = translate_path([selected_triplet], entity_title, relation_title)[0]
                 trace(
                     f"VALIDATED FACTORIZED MOVE [{selected_action}]\n"
-                    f"  relation [{relation_id}] -> entity [{entity_decision['entity']}]\n"
+                    f"  relation [{relation_id}] -> action [{action_id}]\n"
                     f"  ({readable_move[0]}, {readable_move[1]}, {readable_move[2]})\n"
                     f"New current entity: "
                     f"{entity_title.get(current_entity, current_entity)} ({current_entity})"
                 )
-            if entity_decision["stop"]:
+            if action_decision["stop"]:
                 return finalize(
                     status="success",
                     termination_reason="llm_stop",
