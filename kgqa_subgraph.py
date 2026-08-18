@@ -5,13 +5,12 @@ This is a subgraph-at-once QA pipeline, where the entire subgraph is provided to
 """
 
 import argparse
+import json
 import os
+import warnings
 from pathlib import Path
 
-import json
-
 from tqdm import tqdm
-import warnings
 from model.subgraph_llm_client import SubgraphLLMKGQAClient
 from model.constants import valid_models
 
@@ -27,9 +26,11 @@ from utils.graph_utils import (
     generate_multi_answer_paths_from_source
 )
 
-from collections import defaultdict
-
-from utils.kgqa_types import Statistics, StatusInfo
+from utils.kgqa_statistics import (
+    avg_dict,
+    initialize_subgraph_statistics as initialize_statistics,
+    update_subgraph_stats as update_stats,
+)
 
 
 def parse_args():
@@ -104,68 +105,6 @@ The main block of the script handles the following:
 4. Iteratively processing batches of questions, performing subgraph sampling, and evaluating predictions.
 5. Saving the results to a JSON file.
 """
-def initialize_statistics(total: int) -> Statistics:
-    return {
-        'accuracy': 0,
-        'running_count': 0,
-        'total': total,
-        'subgraph_sizes': defaultdict(int),
-        'prompt_tokens': [],
-        'response_tokens': [],
-        'total_tokens': [],
-        'response_seconds': [],
-        'prompt_seconds': [],
-        'total_seconds': [],
-        'prompt_tps': [],
-        'completion_tps': [],
-        'unknown': 0,
-        'timeouts': 0,
-        'errors': 0,
-    }
-
-def update_stats(
-    stats_dict: Statistics, 
-    status_info: StatusInfo, 
-    result: str, 
-    full_pred: str, 
-    sub_graph_size: int,
-) -> None:
-    stats_dict['accuracy'] += int(result)
-    stats_dict['running_count'] += 1
-    stats_dict['subgraph_sizes'][sub_graph_size] += 1
-    
-    # append if exists
-    if 'prompt_tokens' in status_info: stats_dict['prompt_tokens'].append(status_info['prompt_tokens'])
-    if 'response_tokens' in status_info: stats_dict['response_tokens'].append(status_info['response_tokens'])
-    if 'total_tokens' in status_info: stats_dict['total_tokens'].append(status_info['total_tokens'])
-
-    if 'response_seconds' in status_info: stats_dict['response_seconds'].append(status_info['response_seconds'])
-    if 'prompt_seconds' in status_info: stats_dict['prompt_seconds'].append(status_info['prompt_seconds'])
-    if 'total_seconds' in status_info: stats_dict['total_seconds'].append(status_info['total_seconds'])
-
-    if 'prompt_tps' in status_info: stats_dict['prompt_tps'].append(status_info['prompt_tps'])
-    if 'completion_tps' in status_info: stats_dict['completion_tps'].append(status_info['completion_tps'])
-
-    stats_dict['unknown'] += int(full_pred == "UNKNOWN")
-    stats_dict['timeouts'] += int(full_pred == "TIMEOUT")
-    stats_dict['errors'] += int(full_pred == "ERROR")
-
-def average(lst):
-    return sum(lst) / len(lst) if lst else 0
-
-def avg_dict(vals: Statistics) -> Statistics:
-    """
-    Averages the values in a dictionary. If a value is a list, it computes the average of the list.
-    """
-    out = {}
-    for k, v in vals.items():
-        if isinstance(v, list): # if the value is a list, average its elements
-            out[k] = average(v)
-        else:                   # otherwise, keep the value as is
-            out[k] = v
-    return out
-    # check if dict contains lists, if it does, average them
-
 
 
 if __name__ == '__main__':
