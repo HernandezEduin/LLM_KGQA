@@ -66,6 +66,9 @@ python ./kgqa_navigation.py \
   --navigation-approach tuple \
   --memory-approach full \
   --prompting-approach zero-shot \
+  --n-shots 0 \
+  --demo-history-mode full \
+  --demo-max-actions 10 \
   --max-navigation-steps 4 \
   --max-actions 200 \
   --result-dir ./results
@@ -77,9 +80,15 @@ Navigation modes:
 - `factorized`: the LLM chooses a relation first, then receives the normal action prompt limited to only that relation's edges.
 - `hybrid`: uses tuple mode for small neighborhoods and the same two-stage factorized flow for larger ones.
 
-`--max-actions` caps the number of options shown in each prompt. If a node has more than `N` sorted options, only the first `N` are shown to the LLM. This does not terminate the episode by itself. Result JSON records this with `max_actions_truncated` and `max_actions_truncations`.
+`--n-shots` prepends complete solved train trajectories to action-selection prompts. Demonstration sampling is seed-reproducible and prefers longer train trajectories so later hops show gold path history. One shot is one complete trajectory: the question and start entity are shown once, then each hop shows the current entity, selected history view, available actions, and gold JSON selected action. `--n-shots 0` preserves the existing zero-shot behavior. `--prompting-approach one-shot` is a convenience alias for `--n-shots 1` when no explicit shot count is provided.
 
-The prompt is still checked against `--context-window`; if the truncated prompt is too large, the episode terminates with `context_window_exceeded` before that LLM call.
+`--demo-history-mode` controls demonstration history independently of test-time navigation memory. Use `full` for all previous gold hops, `last` for only the immediately previous hop, or `random` for one seeded random previous hop. Hops with no previous edge show `(none)`.
+
+`--demo-max-actions` caps the number of legal actions shown in each demonstrated hop. The demonstrated action list always contains the gold next edge, with other options filled from the remaining sorted neighborhood, and the gold `{"action": ...}` ID is recomputed after truncation. This cap is independent from `--max-actions` and does not change test-time navigation logic.
+
+`--max-actions` caps the number of options shown in each inference prompt. If a node has more than `N` sorted options, only the first `N` are shown to the LLM. This does not terminate the episode by itself. Result JSON records this with `max_actions_truncated` and `max_actions_truncations`.
+
+The prompt is still checked against `--context-window`; if the prompt, including demonstrations, is too large, the episode terminates with `context_window_exceeded` before that LLM call.
 
 Use `--show-navigation` or `--show-actions` to print each prompt, model response, validated move, and termination reason.
 
@@ -140,17 +149,18 @@ This project is licensed under the Academic License.
 
 ### Navigation
 
-- [ ] Implement `--prompting-approach io` and `--prompting-approach one-shot`; add a clean extension point for future few-shot prompts.
+- [ ] Implement `--prompting-approach io` and keep the prompt-template interface extensible for future prompt families.
 - [ ] Add graph directionality options (`outgoing`, `incoming`, `bidirectional`) and propagate the setting through action indexing, path validation, metrics, and result config.
 - [ ] Add configurable `--max-actions` selection policies, such as `first`, seeded random sampling, and question-aware ranking.
 - [ ] Record both prompt-local option IDs and original sorted graph-action IDs in episode records, especially for truncated tuple prompts and factorized relation-action prompts.
 - [ ] Add adaptive context-window handling before termination, such as reducing shown actions or switching from tuple to factorized prompts when possible.
 - [ ] Build a human navigation GUI for manually stepping through the graph and answering questions.
 - [x] Reuse the standard action prompt for factorized second-stage navigation over the selected relation's edges.
+- [x] Add n-shot navigation demonstrations from complete train-set gold trajectories.
 
 ### Prompting And LLM Calls
 
-- [ ] Add shared one-shot and few-shot prompt templates for subgraph and navigation tasks.
+- [ ] Add shared one-shot and few-shot prompt templates for subgraph QA.
 - [ ] Add zero-context QA evaluation without graph context.
 - [ ] Add an optional triplet-to-sentence prompt format for subgraph evidence.
 - [ ] Add bulk/batch chat execution where supported by the backend.

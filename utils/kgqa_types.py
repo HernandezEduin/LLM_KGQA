@@ -54,6 +54,11 @@ NavigationResult = Tuple[str, str, NavigationStatus]
 SubgraphResult = Tuple[str, str, StatusInfo]
 
 
+# Navigation demonstrations
+NavigationDemonstration = Dict[str, Any]
+NavigationDemonstrationList = List[NavigationDemonstration]
+
+
 # Navigation callbacks and parser helpers
 TraceFn = Callable[[str], None]
 StageParser = Callable[[str], NavigationDecision]

@@ -1,5 +1,6 @@
 import json
 import re
+from random import Random
 from typing import Any, Dict, List, Tuple, TypeVar
 
 from model.base_llm_client import BaseLLMKGQAClient
@@ -7,6 +8,7 @@ from utils.kgqa_types import (
     EntityId,
     EntityTitleMap,
     NavigationDecision,
+    NavigationDemonstrationList,
     NavigationResult,
     NavigationStatus,
     OutgoingIndex,
@@ -199,6 +201,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         entity_title: EntityTitleMap,
         relation_title: RelationTitleMap,
         include_history: bool = True,
+        demonstration_prefix: str = "",
     ) -> PromptParts:
         """
         Build one tuple-action graph-navigation prompt from controller-owned state.
@@ -214,6 +217,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
             relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
             include_history (bool): Whether to expose traversed path memory.
+            demonstration_prefix (str): Optional solved trajectory examples to prepend before the current decision.
 
         Returns:
             PromptParts: Prompt text and the formatted history block used in it.
@@ -236,6 +240,14 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 f"  [{action_id}]. ({head_str}, {relation_str}, {tail_str})"
             )
         actions_str = "\n".join(action_lines) if action_lines else "  (none)"
+        has_demonstrations = bool(demonstration_prefix.strip())
+        demonstrations_str = (
+            f"{demonstration_prefix.strip()}\n\n====================\n\n"
+            if has_demonstrations
+            else ""
+        )
+        actual_question_header = "[ACTUAL TEST QUESTION]\n" if has_demonstrations else ""
+        selected_action_prompt = "\n\nSelected Action:\n" if has_demonstrations else ""
         evidence_scope = (
             "question, traversed path, current entity, and available actions"
             if include_history
@@ -273,6 +285,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "Move and stop: {\"action\": 0, \"stop\": true}\n"
             "Stop at current entity: {\"action\": null, \"stop\": true}\n\n"
 
+            f"{demonstrations_str}"
+            f"{actual_question_header}"
             f"Question: {question}\n"
             f"Start entity: {start_entity_str}\n"
             f"Current entity: {current_entity_str}\n"
@@ -283,6 +297,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
             "Available actions:\n"
             f"{actions_str}\n"
+            f"{selected_action_prompt}"
         )
         return template, history_str
 
@@ -388,6 +403,150 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             f"{relations_str}\n"
         )
         return template, history_str
+
+    @staticmethod
+    def _limit_demonstration_actions(
+        actions: TripletList,
+        selected_triplet: Triplet,
+        demo_max_actions: int,
+    ) -> TripletList:
+        """Return a deterministic demo action subset that contains the gold edge."""
+        if demo_max_actions < 1:
+            raise ValueError("demo_max_actions must be positive for demonstration actions.")
+        if selected_triplet not in actions:
+            raise ValueError(f"Selected demonstration triplet is not legal: {selected_triplet}")
+        if len(actions) <= demo_max_actions:
+            return actions
+
+        displayed_actions = actions[:demo_max_actions]
+        if selected_triplet in displayed_actions:
+            return displayed_actions
+        return actions[:demo_max_actions - 1] + [selected_triplet]
+
+    @staticmethod
+    def _select_demonstration_history(
+        history: TripletList,
+        demo_history_mode: str,
+        rng: Random,
+    ) -> TripletList:
+        """Select which previous gold hops to show for one demonstrated hop."""
+        if not history:
+            return []
+        if demo_history_mode == "full":
+            return list(history)
+        if demo_history_mode == "last":
+            return [history[-1]]
+        if demo_history_mode == "random":
+            return [rng.choice(history)]
+        raise ValueError(f"Unsupported demo history mode: {demo_history_mode}")
+
+    def format_navigation_demonstrations(
+        self,
+        demonstrations: NavigationDemonstrationList,
+        outgoing_index: OutgoingIndex,
+        entity_title: EntityTitleMap,
+        relation_title: RelationTitleMap,
+        demo_history_mode: str = "full",
+        demo_max_actions: int = 10,
+        seed: int = 0,
+    ) -> str:
+        """Format complete solved trajectories as action-selection demonstrations.
+
+        Each demonstration shows invariant fields once, then each hop shows the
+        current entity, selected gold history view, capped legal action set that
+        includes the gold edge, and gold JSON action decision.
+
+        Args:
+            demonstrations (NavigationDemonstrationList): Sampled solved train trajectories.
+            outgoing_index (OutgoingIndex): Legal outgoing KG edges by source entity.
+            entity_title (EntityTitleMap): Mapping from entity IDs to readable titles.
+            relation_title (RelationTitleMap): Mapping from relation IDs to readable titles.
+            demo_history_mode (str): One of full, last, or random for shown gold history.
+            demo_max_actions (int): Maximum action options to show at each demo hop.
+            seed (int): Random seed used when demo_history_mode is random.
+
+        Returns:
+            str: Prompt-ready n-shot demonstration prefix.
+
+        Raises:
+            ValueError: If a demonstration path cannot be executed from its start node.
+        """
+        if not demonstrations:
+            return ""
+        if demo_history_mode not in {"full", "last", "random"}:
+            raise ValueError(f"Unsupported demo history mode: {demo_history_mode}")
+        if demo_max_actions < 1:
+            raise ValueError("demo_max_actions must be positive.")
+
+        history_rng = Random(seed)
+        blocks = [
+            "[DEMONSTRATIONS]",
+            "Each solved trajectory follows the same action-selection format as the task below.",
+        ]
+        for demo_index, demo in enumerate(demonstrations, start=1):
+            question = str(demo["question"])
+            start_node = str(demo["start_node"])
+            path = [tuple(triplet) for triplet in demo["path"]]
+            current_entity = start_node
+            history: TripletList = []
+            blocks.extend([
+                f"\n[DEMONSTRATION {demo_index}]",
+                f"Question: {question}",
+                f"Start entity: {self._format_entity_reference(start_node, entity_title)}",
+            ])
+
+            for step, selected_triplet in enumerate(path, start=1):
+                actions = sorted(
+                    outgoing_index.get(current_entity, []),
+                    key=lambda triplet: (triplet[1], triplet[2]),
+                )
+                if selected_triplet not in actions:
+                    raise ValueError(
+                        f"Demonstration {demo_index} step {step} selected triplet is not a legal action: "
+                        f"{selected_triplet}"
+                    )
+                demo_actions = self._limit_demonstration_actions(
+                    actions,
+                    selected_triplet,
+                    demo_max_actions,
+                )
+                action_id = demo_actions.index(selected_triplet)
+                stop = step == len(path)
+                shown_history = self._select_demonstration_history(
+                    history,
+                    demo_history_mode,
+                    history_rng,
+                )
+                history_str = self._format_navigation_history(
+                    shown_history,
+                    entity_title,
+                    relation_title,
+                    include_history=True,
+                )
+                action_lines = []
+                for option_id, action in enumerate(demo_actions):
+                    action_lines.append(
+                        f"  [{option_id}]. "
+                        f"{self._format_triplet(action, entity_title, relation_title)}"
+                    )
+                actions_str = "\n".join(action_lines) if action_lines else "  (none)"
+                decision = {"action": action_id, "stop": stop}
+
+                blocks.extend([
+                    f"Hop {step}:",
+                    f"Current entity: {self._format_entity_reference(current_entity, entity_title)}",
+                    "Traversed path:",
+                    history_str,
+                    "Available actions:",
+                    actions_str,
+                    "Selected Action:",
+                    json.dumps(decision),
+                ])
+                history.append(selected_triplet)
+                current_entity = selected_triplet[2]
+            blocks.append("Final trajectory completed.")
+
+        return "\n".join(blocks)
 
     @classmethod
     def parse_navigation_decision(cls, content: str, num_actions: int) -> NavigationDecision:
@@ -600,6 +759,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         prompting_approach: str = "zero-shot",
         hybrid_threshold: int = 50,
         max_parse_retries: int = 1,
+        demonstration_prefix: str = "",
+        n_shots: int = 0,
         trace: TraceFn | None = None,
     ) -> NavigationResult:
         """
@@ -616,9 +777,11 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 only the first max_actions sorted options are shown to the LLM.
             navigation_approach (str): One of tuple, factorized, or hybrid.
             memory_approach (str): Whether to expose full path memory or hide it from prompts.
-            prompting_approach (str): Prompting mode; currently zero-shot only.
+            prompting_approach (str): Prompting mode label for result metadata.
             hybrid_threshold (int): Tuple/factorized switch point for hybrid navigation.
             max_parse_retries (int): Number of schema-correction retries after invalid JSON.
+            demonstration_prefix (str): Optional solved navigation trajectories prepended to action prompts.
+            n_shots (int): Number of solved train trajectories included in the prompt prefix.
             trace (TraceFn | None): Optional sink for verbose prompt/output traces.
 
         Returns:
@@ -632,11 +795,13 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             raise ValueError(f"Unsupported navigation approach: {navigation_approach}")
         if memory_approach not in {"none", "full"}:
             raise ValueError(f"Unsupported memory approach: {memory_approach}")
-        if prompting_approach != "zero-shot":
+        if not prompting_approach.endswith("-shot"):
             raise NotImplementedError(
                 f"Prompting approach '{prompting_approach}' is not implemented for navigation. "
-                "Use --prompting-approach zero-shot."
+                "Use --prompting-approach zero-shot with --n-shots for n-shot prompting."
             )
+        if n_shots < 0:
+            raise ValueError("n_shots must be non-negative.")
         if hybrid_threshold < 0:
             raise ValueError("hybrid_threshold must be non-negative.")
         if max_parse_retries < 0:
@@ -663,6 +828,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "navigation_approach": navigation_approach,
             "memory_approach": memory_approach,
             "prompting_approach": prompting_approach,
+            "n_shots": n_shots,
+            "has_demonstrations": bool(demonstration_prefix.strip()),
             "hybrid_threshold": hybrid_threshold,
             "max_actions": max_actions,
             "max_parse_retries": max_parse_retries,
@@ -941,6 +1108,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     entity_title=entity_title,
                     relation_title=relation_title,
                     include_history=include_history,
+                    demonstration_prefix=demonstration_prefix,
                 )
                 context_failure = fail_context_window(step, "tuple", strategy, prompt)
                 if context_failure is not None:
@@ -1076,6 +1244,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 entity_title=entity_title,
                 relation_title=relation_title,
                 include_history=include_history,
+                demonstration_prefix=demonstration_prefix,
             )
             context_failure = fail_context_window(step, "relation_action", strategy, action_prompt)
             if context_failure is not None:

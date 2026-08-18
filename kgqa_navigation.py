@@ -12,6 +12,7 @@ import json
 import os
 from collections import defaultdict
 from numbers import Number
+from random import Random
 from pathlib import Path
 from typing import Any
 
@@ -20,12 +21,19 @@ from tqdm import tqdm
 from model.navigation_llm_client import NavigationLLMKGQAClient
 from model.constants import valid_models
 from utils.basic import extract_literals, load_pandas, load_triplets
-from utils.graph_utils import build_outgoing_index
+from utils.graph_utils import (
+    build_outgoing_index,
+    build_relation_index,
+    generate_multi_answer_paths_from_source,
+)
 from utils.kgqa_types import (
     EntityId,
     MetricScores,
+    NavigationDemonstrationList,
+    OutgoingIndex,
     PathList,
     RelationChain,
+    RelationIndex,
     StatusInfo,
     Statistics,
     TripletList,
@@ -78,6 +86,13 @@ def parse_args():
                               'If exceeded, only the first N sorted options are shown to the LLM.'))
     parser.add_argument('--max-navigation-steps', type=int, default=4,
                         help='Maximum number of graph edges the model may traverse before termination.')
+    parser.add_argument('--n-shots', type=int, default=0,
+                        help='Number of complete solved train trajectories to prepend as navigation demonstrations.')
+    parser.add_argument('--demo-history-mode', type=str, default='full',
+                        choices=['full', 'last', 'random'],
+                        help='History shown inside demonstrated hops: full path, last hop, or one seeded random hop.')
+    parser.add_argument('--demo-max-actions', type=int, default=10,
+                        help='Maximum number of available actions shown at each demonstrated hop.')
     parser.add_argument('--navigation-approach', type=str, default='tuple',
                         choices=['tuple', 'factorized', 'hybrid'],
                         help='Tuple, factorized relation/entity, or threshold-based hybrid navigation.')
@@ -86,7 +101,7 @@ def parse_args():
                         help='Observation memory: none hides previous edges; full shows the traversed path.')
     parser.add_argument('--prompting-approach', type=str, default='zero-shot',
                         choices=['io', 'zero-shot', 'one-shot'],
-                        help='Only zero-shot navigation is currently implemented.')
+                        help='Prompting mode label. Use --n-shots for n-shot demonstrations; one-shot sets --n-shots=1 when omitted.')
     parser.add_argument('--hybrid-threshold', type=int, default=50,
                         help='Use tuple mode when neighborhood size is <= this threshold, else factorized.')
     parser.add_argument('--max-parse-retries', type=int, default=1,
@@ -322,6 +337,184 @@ def get_row_value(row: object, key: str, default: Any = None) -> Any:
     return row[key] if key in row else default
 
 
+def get_gold_candidate_paths(
+    row: object,
+    relation_index: RelationIndex,
+) -> PathList:
+    """Return complete candidate gold paths for one QA row.
+
+    Prefer explicit Paths values. If absent, reconstruct paths from Path-Key via
+    the directed relation index, then keep paths that end in a gold answer when
+    answer entities are available.
+    """
+    paths: PathList = []
+    if 'Paths' in row and row['Paths'] != '':
+        paths = normalize_reference_paths(row['Paths'])
+    elif 'Path-Key' in row and row['Path-Key'] != '':
+        relation_chain = normalize_relation_chain(row['Path-Key'])
+        if relation_chain is not None:
+            paths = generate_multi_answer_paths_from_source(
+                source_entity=row['Source-Entity'],
+                rel_list=relation_chain,
+                relation_index=relation_index,
+            )
+
+    answer_entities = normalize_answer_entities(row['Answer-Entity']) if 'Answer-Entity' in row else set()
+    if answer_entities:
+        paths = [path for path in paths if path and path[-1][2] in answer_entities]
+    return paths
+
+
+def number_to_shot_label(n_shots: int) -> str:
+    """Return the filename/result label for a non-negative shot count."""
+    if n_shots < 0:
+        raise ValueError('n_shots must be non-negative.')
+
+    ones = {
+        0: 'zero',
+        1: 'one',
+        2: 'two',
+        3: 'three',
+        4: 'four',
+        5: 'five',
+        6: 'six',
+        7: 'seven',
+        8: 'eight',
+        9: 'nine',
+        10: 'ten',
+        11: 'eleven',
+        12: 'twelve',
+        13: 'thirteen',
+        14: 'fourteen',
+        15: 'fifteen',
+        16: 'sixteen',
+        17: 'seventeen',
+        18: 'eighteen',
+        19: 'nineteen',
+    }
+    tens = {
+        20: 'twenty',
+        30: 'thirty',
+        40: 'forty',
+        50: 'fifty',
+        60: 'sixty',
+        70: 'seventy',
+        80: 'eighty',
+        90: 'ninety',
+    }
+
+    if n_shots in ones:
+        shot_count = ones[n_shots]
+    elif n_shots < 100:
+        base = n_shots // 10 * 10
+        remainder = n_shots % 10
+        shot_count = tens[base] if remainder == 0 else f"{tens[base]}-{ones[remainder]}"
+    else:
+        shot_count = str(n_shots)
+    return f'{shot_count}-shot'
+
+
+def get_navigation_demonstration_hop_hint(row: object) -> int:
+    """Estimate trajectory length so n-shot demos prefer examples with history."""
+    hop_value = get_row_value(row, 'Hops')
+    try:
+        if hop_value != '':
+            return int(hop_value)
+    except (TypeError, ValueError):
+        pass
+
+    if 'Path-Key' in row and row['Path-Key'] != '':
+        relation_chain = normalize_relation_chain(row['Path-Key'])
+        if relation_chain is not None:
+            return len(relation_chain)
+
+    if 'Paths' in row and row['Paths'] != '':
+        paths = normalize_reference_paths(row['Paths'])
+        if paths:
+            return max(len(path) for path in paths)
+
+    return 0
+
+
+def is_executable_gold_path(
+    start_node: EntityId,
+    path: TripletList,
+    outgoing_index: OutgoingIndex,
+) -> bool:
+    """Check that every gold edge is a legal directed action from the current entity."""
+    current_entity = start_node
+    for triplet in path:
+        triplet = tuple(triplet)
+        actions = sorted(
+            outgoing_index.get(current_entity, []),
+            key=lambda action: (action[1], action[2]),
+        )
+        if triplet[0] != current_entity or triplet not in actions:
+            return False
+        current_entity = triplet[2]
+    return bool(path)
+
+
+def sample_navigation_demonstrations(
+    train_df: Any,
+    outgoing_index: OutgoingIndex,
+    relation_index: RelationIndex,
+    n_shots: int,
+    seed: int,
+) -> NavigationDemonstrationList:
+    """Sample executable complete train trajectories for n-shot navigation prompts."""
+    if n_shots == 0:
+        return []
+
+    rng = Random(seed)
+    row_positions = list(range(len(train_df)))
+    rng.shuffle(row_positions)
+    row_positions.sort(
+        key=lambda row_position: get_navigation_demonstration_hop_hint(
+            train_df.iloc[row_position]
+        ),
+        reverse=True,
+    )
+    demonstrations: NavigationDemonstrationList = []
+    skipped_rows = 0
+
+    for row_position in row_positions:
+        row = train_df.iloc[row_position]
+        start_node = row['Source-Entity']
+        executable_paths: PathList = []
+        for candidate_path in get_gold_candidate_paths(row, relation_index):
+            path = [tuple(triplet) for triplet in candidate_path]
+            if is_executable_gold_path(start_node, path, outgoing_index):
+                executable_paths.append(path)
+
+        if not executable_paths:
+            skipped_rows += 1
+            continue
+        selected_path = max(executable_paths, key=len)
+
+        demonstrations.append({
+            'question_index': get_row_value(row, 'Question-Number', row_position),
+            'row_position': row_position,
+            'hop_hint': get_navigation_demonstration_hop_hint(row),
+            'question': row['Question'],
+            'start_node': start_node,
+            'answer_entities': sorted(normalize_answer_entities(row['Answer-Entity'])) if 'Answer-Entity' in row else [],
+            'path': selected_path,
+            'path_length': len(selected_path),
+        })
+        if len(demonstrations) == n_shots:
+            break
+
+    if len(demonstrations) < n_shots:
+        raise ValueError(
+            f"Requested {n_shots} n-shot navigation demonstrations, but only found "
+            f"{len(demonstrations)} executable complete train trajectories "
+            f"({skipped_rows} sampled train rows skipped)."
+        )
+
+    return demonstrations
+
+
 if __name__ == '__main__':
     args = parse_args()
 
@@ -331,15 +524,22 @@ if __name__ == '__main__':
         raise ValueError('--max-questions must be positive.')
     if args.max_actions is not None and args.max_actions < 1:
         raise ValueError('--max-actions must be positive when provided.')
+    if args.n_shots < 0:
+        raise ValueError('--n-shots must be non-negative.')
+    if args.demo_max_actions < 1:
+        raise ValueError('--demo-max-actions must be positive.')
     if args.hybrid_threshold < 0:
         raise ValueError('--hybrid-threshold must be non-negative.')
     if args.max_parse_retries < 0:
         raise ValueError('--max-parse-retries must be non-negative.')
-    if args.prompting_approach != 'zero-shot':
+    if args.prompting_approach == 'one-shot' and args.n_shots == 0:
+        args.n_shots = 1
+    if args.prompting_approach == 'io':
         raise NotImplementedError(
-            f"--prompting-approach {args.prompting_approach!r} is not implemented for "
-            'iterative navigation yet. Use --prompting-approach zero-shot.'
+            "--prompting-approach 'io' is not implemented for iterative navigation yet. "
+            'Use --prompting-approach zero-shot with --n-shots for n-shot prompting.'
         )
+    prompting_label = number_to_shot_label(args.n_shots)
 
     data_dir = os.path.join(args.data_dir, args.dataset)
     qa_file = os.path.join(data_dir, f'qa_{args.hops}hop.csv')
@@ -355,9 +555,11 @@ if __name__ == '__main__':
     all_triplets_df = load_triplets(triplet_file)
     all_triplets = set(tuple(triplet) for triplet in all_triplets_df.values)
     outgoing_index = build_outgoing_index(all_triplets)
+    relation_index = build_relation_index(all_triplets)
 
-    qa_df = load_pandas(qa_file)
-    qa_df = qa_df[qa_df['SplitLabel'] == 'test'].copy()
+    qa_all_df = load_pandas(qa_file)
+    train_df = qa_all_df[qa_all_df['SplitLabel'] == 'train'].copy()
+    qa_df = qa_all_df[qa_all_df['SplitLabel'] == 'test'].copy()
     if args.max_questions is not None:
         qa_df = qa_df.head(args.max_questions).copy()
 
@@ -381,6 +583,23 @@ if __name__ == '__main__':
         temperature=args.temperature,
         timeout=args.timeout,
         debug=args.debug,
+    )
+
+    demonstration_records = sample_navigation_demonstrations(
+        train_df=train_df.reset_index(drop=True),
+        outgoing_index=outgoing_index,
+        relation_index=relation_index,
+        n_shots=args.n_shots,
+        seed=args.seed,
+    )
+    demonstration_prefix = client.format_navigation_demonstrations(
+        demonstrations=demonstration_records,
+        outgoing_index=outgoing_index,
+        entity_title=entity_title,
+        relation_title=relation_title,
+        demo_history_mode=args.demo_history_mode,
+        demo_max_actions=args.demo_max_actions,
+        seed=args.seed,
     )
 
     statistics = {'overall': initialize_statistics(total=len(qa_df))}
@@ -413,9 +632,11 @@ if __name__ == '__main__':
                 max_actions=args.max_actions,
                 navigation_approach=args.navigation_approach,
                 memory_approach=args.memory_approach,
-                prompting_approach=args.prompting_approach,
+                prompting_approach=prompting_label,
                 hybrid_threshold=args.hybrid_threshold,
                 max_parse_retries=args.max_parse_retries,
+                demonstration_prefix=demonstration_prefix,
+                n_shots=args.n_shots,
                 trace=pbar.write if args.show_navigation else None,
             )
 
@@ -498,7 +719,8 @@ if __name__ == '__main__':
                 'navigation_approach': status_info.get('navigation_approach', args.navigation_approach),
                 'strategy_by_step': status_info.get('strategy_by_step', []),
                 'memory_approach': status_info.get('memory_approach', args.memory_approach),
-                'prompting_approach': status_info.get('prompting_approach', args.prompting_approach),
+                'prompting_approach': status_info.get('prompting_approach', prompting_label),
+                'n_shots': status_info.get('n_shots', args.n_shots),
                 'hybrid_threshold': status_info.get('hybrid_threshold', args.hybrid_threshold),
                 'max_actions': status_info.get('max_actions', args.max_actions),
                 'max_parse_retries': status_info.get('max_parse_retries', args.max_parse_retries),
@@ -593,7 +815,7 @@ if __name__ == '__main__':
     results_file = os.path.join(
         result_path,
         f"results_{args.hops}hop_{model_name}_{args.navigation_approach}_{args.memory_approach}_"
-        f"{args.prompting_approach}_steps{args.max_navigation_steps}{hybrid_suffix}"
+        f"{prompting_label}_steps{args.max_navigation_steps}{hybrid_suffix}"
         f"{max_actions_suffix}{question_limit_suffix}_seed{args.seed}.json",
     )
 
@@ -612,7 +834,12 @@ if __name__ == '__main__':
             'data_dir': args.data_dir,
             'navigation_approach': args.navigation_approach,
             'memory_approach': args.memory_approach,
-            'prompting_approach': args.prompting_approach,
+            'prompting_approach': prompting_label,
+            'requested_prompting_approach': args.prompting_approach,
+            'n_shots': args.n_shots,
+            'demo_history_mode': args.demo_history_mode,
+            'demo_max_actions': args.demo_max_actions,
+            'demonstrations': demonstration_records,
             'max_navigation_steps': args.max_navigation_steps,
             'max_actions': args.max_actions,
             'hybrid_threshold': args.hybrid_threshold,
