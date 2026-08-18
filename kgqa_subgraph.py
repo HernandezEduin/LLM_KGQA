@@ -9,7 +9,6 @@ import os
 from pathlib import Path
 
 import json
-import pandas as pd
 
 from tqdm import tqdm
 import warnings
@@ -91,7 +90,7 @@ def parse_args():
                         help='Non-oracle subgraph retrieval method.')
     
     # Result parameters
-    parser.add_argument('--result-dir', type=str, default='./results',
+    parser.add_argument('--result-dir', type=str, default='./results/subgraph/',
                         help='Directory to save the results.')
 
     return parser.parse_args()

@@ -54,7 +54,7 @@ def parse_args():
     # Dataset parameters
     parser.add_argument('--data-dir', type=str, default='./data',
                         help='Path containing the dataset splits.')
-    parser.add_argument('--dataset', type=str, default='mquake',
+    parser.add_argument('--dataset', type=str, default='mquake_single',
                         help='Name of the dataset to process.')
     parser.add_argument('--hops', type=str, default='n',
                         help='QA dataset hop split to evaluate.')
@@ -93,17 +93,22 @@ def parse_args():
                         help='History shown inside demonstrated hops: full path, last hop, or one seeded random hop.')
     parser.add_argument('--demo-max-actions', type=int, default=10,
                         help='Maximum number of available actions shown at each demonstrated hop.')
+    # TODO: Factorized and Hybrid need reverification for demonstrations. For now, only tuple is supported for n-shot demos.
     parser.add_argument('--navigation-approach', type=str, default='tuple',
                         choices=['tuple', 'factorized', 'hybrid'],
                         help='Tuple, factorized relation/entity, or threshold-based hybrid navigation.')
+    # TODO: Must update demonstration for 'none' memory approach. For now, only full is supported for n-shot demos.
     parser.add_argument('--memory-approach', type=str, default='full',
                         choices=['none', 'full'],
                         help='Observation memory: none hides previous edges; full shows the traversed path.')
+    # TODO: Must implement IO prompting or remove the option.
+    # TODO: Additionally, add the option for last LLM call to generate the final answer instead of the last entity in the path.
     parser.add_argument('--prompting-approach', type=str, default='zero-shot',
                         choices=['io', 'zero-shot', 'one-shot'],
                         help='Prompting mode label. Use --n-shots for n-shot demonstrations; one-shot sets --n-shots=1 when omitted.')
     parser.add_argument('--hybrid-threshold', type=int, default=50,
                         help='Use tuple mode when neighborhood size is <= this threshold, else factorized.')
+    # TODO: Recheck this or be more lenient so long as {action=, stop=} is present in the JSON output.
     parser.add_argument('--max-parse-retries', type=int, default=1,
                         help='Retry a navigation decision this many times after malformed JSON output.')
 
@@ -113,7 +118,7 @@ def parse_args():
                         help='Show every navigation prompt, model response, and validated move.')
 
     # Result parameters
-    parser.add_argument('--result-dir', type=str, default='./results',
+    parser.add_argument('--result-dir', type=str, default='./results/navigation/',
                         help='Directory to save the results.')
 
     return parser.parse_args()
