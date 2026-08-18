@@ -159,15 +159,17 @@ if __name__ == '__main__':
 
     all_triplets_df = load_triplets(triplet_file)
     all_triplets = set(tuple(triplet) for triplet in all_triplets_df.values)
-    outgoing_index = build_outgoing_index(all_triplets)
+    outgoing_index = build_outgoing_index(all_triplets) # TODO: Add an option to build bidirectional index for other datasets. For now, only outgoing edges are used for MQuAKE and kinship_v2.
     relation_index = build_relation_index(all_triplets)
 
     qa_all_df = load_pandas(qa_file)
     train_df = qa_all_df[qa_all_df['SplitLabel'] == 'train'].copy()
-    qa_df = qa_all_df[qa_all_df['SplitLabel'] == 'test'].copy()
+    qa_df = qa_all_df[qa_all_df['SplitLabel'] == 'test'].copy() # TODO: Add an option to evaluate on validation split for hyperparameter tuning.
     if args.max_questions is not None:
         qa_df = qa_df.head(args.max_questions).copy()
 
+    # TODO: Adjust the code to also accept multiple answer, currently only single answer with single valid path is supported.
+    # check if answers are lists (multi-answer) or single values, and adjust accordingly
     if not qa_df.empty and qa_df['Answer'].apply(
         lambda value: isinstance(value, str) and value.strip().startswith('[')
     ).all():

@@ -40,6 +40,7 @@ def load_title_maps(
     entity_file: str,
     relation_file: str,
 ) -> Tuple[EntityTitleMap, RelationTitleMap, StatusInfo]:
+    # TODO: Allow for different column names for QID/Property and Title, e.g., "EID"/"RID" and "Title" in MetaQA.
     """Load optional entity/relation label maps, falling back to identity labels.
 
     Encoded datasets such as MQuAKE provide ``node_data.csv`` and
