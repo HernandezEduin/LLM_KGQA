@@ -79,6 +79,7 @@ def parse_args():
     parser.add_argument('--max-actions', type=int, default=None,
                         help=('Optional cap for the number of options shown in a single prompt. '
                               'If exceeded, only the first N sorted options are shown to the LLM.'))
+    parser.add_argument('--max-actions-policy', default='first', choices=['first', 'random', 'question-aware'], help='Policy used when --max-actions is exceeded.')
     parser.add_argument('--max-navigation-steps', type=int, default=4,
                         help='Maximum number of graph edges the model may traverse before termination.')
     parser.add_argument('--n-shots', type=int, default=0,
@@ -237,6 +238,7 @@ if __name__ == '__main__':
                 relation_title=relation_title,
                 max_steps=args.max_navigation_steps,
                 max_actions=args.max_actions,
+                max_actions_policy=args.max_actions_policy,
                 navigation_approach=args.navigation_approach,
                 memory_approach=args.memory_approach,
                 prompting_approach=prompting_label,
@@ -330,6 +332,7 @@ if __name__ == '__main__':
                 'n_shots': status_info.get('n_shots', args.n_shots),
                 'hybrid_threshold': status_info.get('hybrid_threshold', args.hybrid_threshold),
                 'max_actions': status_info.get('max_actions', args.max_actions),
+                'max_actions_policy': status_info.get('max_actions_policy', args.max_actions_policy),
                 'max_parse_retries': status_info.get('max_parse_retries', args.max_parse_retries),
                 'logical_decisions': status_info.get('logical_decisions', []),
                 'logical_decision_count': status_info.get('logical_decision_count', 0),
@@ -418,7 +421,8 @@ if __name__ == '__main__':
 
     question_limit_suffix = f"_questions{len(qa_df)}" if args.max_questions is not None else ''
     hybrid_suffix = f"_hybrid{args.hybrid_threshold}" if args.navigation_approach == 'hybrid' else ''
-    max_actions_suffix = f"_maxactions{args.max_actions}" if args.max_actions is not None else '_fullactions'
+    max_actions_suffix = (f"_maxactions{args.max_actions}_{args.max_actions_policy}"
+                          if args.max_actions is not None else '_fullactions')
     results_file = os.path.join(
         result_path,
         f"results_{args.hops}hop_{model_name}_{args.navigation_approach}_{args.memory_approach}_"
@@ -449,6 +453,7 @@ if __name__ == '__main__':
             'demonstrations': demonstration_records,
             'max_navigation_steps': args.max_navigation_steps,
             'max_actions': args.max_actions,
+            'max_actions_policy': args.max_actions_policy,
             'hybrid_threshold': args.hybrid_threshold,
             'max_parse_retries': args.max_parse_retries,
             'graph_directionality': 'outgoing',

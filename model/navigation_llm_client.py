@@ -4,6 +4,7 @@ from random import Random
 from typing import Any, Dict, List, Tuple, TypeVar
 
 from model.base_llm_client import BaseLLMKGQAClient
+from utils.action_selection import select_options
 from utils.kgqa_types import (
     EntityId,
     EntityTitleMap,
@@ -754,6 +755,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         relation_title: RelationTitleMap,
         max_steps: int = 4,
         max_actions: int | None = None,
+        max_actions_policy: str = "first",
         navigation_approach: str = "tuple",
         memory_approach: str = "full",
         prompting_approach: str = "zero-shot",
@@ -791,6 +793,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             raise ValueError("max_steps must be non-negative.")
         if max_actions is not None and max_actions < 1:
             raise ValueError("max_actions must be positive when provided.")
+        if max_actions_policy not in {"first", "random", "question-aware"}:
+            raise ValueError(f"Unsupported max-actions policy: {max_actions_policy}")
         if navigation_approach not in {"tuple", "factorized", "hybrid"}:
             raise ValueError(f"Unsupported navigation approach: {navigation_approach}")
         if memory_approach not in {"none", "full"}:
@@ -832,6 +836,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "has_demonstrations": bool(demonstration_prefix.strip()),
             "hybrid_threshold": hybrid_threshold,
             "max_actions": max_actions,
+            "max_actions_policy": max_actions_policy,
             "max_parse_retries": max_parse_retries,
             "logical_decisions": [],
             "logical_decision_count": 0,
@@ -986,10 +991,13 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             strategy: str,
             option_kind: str,
             options: List[OptionT],
-        ) -> List[OptionT]:
+        ) -> Tuple[List[OptionT], List[int]]:
             option_count = len(options)
-            if max_actions is None or option_count <= max_actions:
-                return options
+            selected = select_options(options, max_actions, max_actions_policy, question=question, seed=self.seed, step=step, option_kind=option_kind, current_entity=current_entity, entity_title=entity_title, relation_title=relation_title)
+            prompted_options = [option for _, option in selected]
+            original_ids = [original_id for original_id, _ in selected]
+            if option_count <= len(prompted_options):
+                return prompted_options, original_ids
 
             aggregate_status["max_actions_exceeded"] = True
             aggregate_status["max_actions_truncated"] = True
@@ -999,13 +1007,15 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 "option_kind": option_kind,
                 "original_count": option_count,
                 "shown_count": max_actions,
+                "policy": max_actions_policy,
+                "shown_original_ids": original_ids,
             })
             if trace is not None:
                 trace(
                     f"MAX ACTIONS APPLIED ({strategy}/{option_kind})\n"
-                    f"Showing first {max_actions} of {option_count} available options."
+                    f"Showing {max_actions} of {option_count} options using policy '{max_actions_policy}'."
                 )
-            return options[:max_actions]
+            return prompted_options, original_ids
 
         def fail_context_window(
             step: int,
@@ -1048,6 +1058,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 "current_entity": current_before,
                 "neighborhood_size": len(actions),
                 "selected_action": selected_action,
+                "original_action_id": selected_action,
                 "selected_relation": selected_triplet[1],
                 "selected_destination": selected_triplet[2],
                 "selected_triplet": selected_triplet,
@@ -1095,7 +1106,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
             if strategy == "tuple":
                 # Tuple navigation asks the LLM to choose directly from full outgoing edges.
-                prompted_actions = limit_options(step, strategy, "tuple_action", actions)
+                prompted_actions, prompted_action_ids = limit_options(step, strategy, "tuple_action", actions)
 
                 prompt, _ = self.prepare_navigation_prompt(
                     question=question,
@@ -1145,6 +1156,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     )
 
                 selected_triplet = prompted_actions[action_id]
+                original_action_id = prompted_action_ids[action_id]
                 history.append(selected_triplet)
                 current_entity = selected_triplet[2]
                 aggregate_status["final_entity"] = current_entity
@@ -1154,9 +1166,9 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     current_before=current_before,
                     actions=actions,
                     selected_triplet=selected_triplet,
-                    selected_action=action_id,
+                    selected_action=original_action_id,
                     stop=decision["stop"],
-                    extra={"raw_output": content},
+                    extra={"prompt_action_id": action_id, "raw_output": content},
                 )
                 if trace is not None:
                     readable_move = translate_path([selected_triplet], entity_title, relation_title)[0]
@@ -1177,7 +1189,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
 
             # Factorized navigation first chooses a relation, then a destination among that relation's edges.
             relation_groups = self._group_actions_by_relation(actions)
-            prompted_relation_groups = limit_options(step, strategy, "relation", relation_groups)
+            prompted_relation_groups, prompted_relation_ids = limit_options(step, strategy, "relation", relation_groups)
 
             relation_prompt, _ = self.prepare_relation_navigation_prompt(
                 question=question,
@@ -1226,7 +1238,8 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 )
 
             selected_relation, relation_actions = prompted_relation_groups[relation_id]
-            prompted_relation_actions = limit_options(
+            original_relation_id = prompted_relation_ids[relation_id]
+            prompted_relation_actions, prompted_relation_action_ids = limit_options(
                 step,
                 strategy,
                 "destination_entity",
@@ -1298,6 +1311,10 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 extra={
                     "relation_choice": relation_id,
                     "relation_action_choice": action_id,
+                    "prompt_relation_id": relation_id,
+                    "original_relation_id": original_relation_id,
+                    "prompt_action_id": action_id,
+                    "relation_action_original_id": prompted_relation_action_ids[action_id],
                     "raw_relation_output": relation_content,
                     "raw_action_output": action_content,
                 },

@@ -86,7 +86,7 @@ Navigation modes:
 
 `--demo-max-actions` caps the number of legal actions shown in each demonstrated hop. The demonstrated action list always contains the gold next edge, with other options filled from the remaining sorted neighborhood, and the gold `{"action": ...}` ID is recomputed after truncation. This cap is independent from `--max-actions` and does not change test-time navigation logic.
 
-`--max-actions` caps the number of options shown in each inference prompt. If a node has more than `N` sorted options, only the first `N` are shown to the LLM. This does not terminate the episode by itself. Result JSON records this with `max_actions_truncated` and `max_actions_truncations`.
+`--max-actions` caps the options shown in each inference prompt. Use `--max-actions-policy first` (default), `random` (seeded sampling), or `question-aware` (deterministic lexical ranking). Results record prompt-local and original sorted option IDs.
 
 The prompt is still checked against `--context-window`; if the prompt, including demonstrations, is too large, the episode terminates with `context_window_exceeded` before that LLM call.
 
@@ -138,7 +138,7 @@ Subgraph outputs include:
 
 - The graph controller only executes legal KG edges listed in the prompt.
 - Navigation uses the terminal graph entity as the prediction.
-- `--max-actions` is deterministic because actions are sorted before truncation.
+- `first` and `question-aware` are deterministic; `random` is reproducible for the same seed, question, step, stage, and current entity.
 - No answer-type hints are added to prompts.
 
 ## License
@@ -151,7 +151,7 @@ This project is licensed under the Academic License.
 
 - [ ] Implement `--prompting-approach io` and keep the prompt-template interface extensible for future prompt families.
 - [ ] Add graph directionality options (`outgoing`, `incoming`, `bidirectional`) and propagate the setting through action indexing, path validation, metrics, and result config.
-- [ ] Add configurable `--max-actions` selection policies, such as `first`, seeded random sampling, and question-aware ranking.
+- [x] Add configurable `--max-actions` selection policies, such as `first`, seeded random sampling, and question-aware ranking.
 - [ ] Record both prompt-local option IDs and original sorted graph-action IDs in episode records, especially for truncated tuple prompts and factorized relation-action prompts.
 - [ ] Reverify n-shot demonstrations for factorized and hybrid navigation flows.
 - [ ] Add support for `--memory-approach none` in n-shot demonstration prompts.
