@@ -3,6 +3,8 @@ import signal
 import threading
 from pathlib import Path
 
+import requests
+
 from model.constants import (
     context_window_limits,
     has_instruct_versions,
@@ -121,6 +123,9 @@ class BaseLLMKGQAClient:
         seed: int | None = None,
         temperature: float | None = None,
         timeout: int = 120,
+        connect_timeout: int = 5,
+        timeout_cooldown: float = 5.0,
+        max_output_tokens: int | None = 256,
         debug: bool = False,
     ) -> None:
         """
@@ -136,6 +141,9 @@ class BaseLLMKGQAClient:
             seed (int | None): Optional random seed for the requests.
             temperature (float | None): Optional sampling temperature for the requests.
             timeout (int): Timeout in seconds for LLM API requests.
+            connect_timeout (int): Connection-establishment timeout in seconds.
+            timeout_cooldown (float): Grace period after a read timeout.
+            max_output_tokens (int | None): Maximum generation length.
             debug (bool): Enable debug mode for verbose output.
         """
         if model_choice not in valid_models:
@@ -159,6 +167,9 @@ class BaseLLMKGQAClient:
         self.use_quantized = use_quantized
         self.quantization_bits = quantization_bits
         self.timeout = timeout
+        self.connect_timeout = connect_timeout
+        self.timeout_cooldown = timeout_cooldown
+        self.max_output_tokens = max_output_tokens
         self.context_window = context_window
         self.seed = seed
         self.temperature = temperature
@@ -168,6 +179,7 @@ class BaseLLMKGQAClient:
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
         }
+        self.session = requests.Session()
 
         self.models_resp = self._fetch_models()
         self.model_ids = extract_model_ids(self.models_resp)
@@ -208,7 +220,7 @@ class BaseLLMKGQAClient:
         Returns:
             APIResponse: JSON response containing the list of models.
         """
-        return list_models(base_url=self.base_url, headers=self.headers)
+        return list_models(base_url=self.base_url, headers=self.headers, session=self.session)
 
     def _log_available_models(self) -> None:
         """
@@ -240,6 +252,10 @@ class BaseLLMKGQAClient:
             seed=self.seed,
             temperature=self.temperature,
             timeout=self.timeout,
+            connect_timeout=self.connect_timeout,
+            timeout_cooldown=self.timeout_cooldown,
+            max_output_tokens=self.max_output_tokens,
+            session=self.session,
         )
 
     def normalize_usage(
@@ -330,6 +346,8 @@ class BaseLLMKGQAClient:
             unload_model(self.base_url, self.headers, self.model_choice)
         except Exception:
             pass
+        finally:
+            self.session.close()
 
     def __del__(self) -> None:
         # Destructor is NOT guaranteed to run, but it's a helpful fallback.

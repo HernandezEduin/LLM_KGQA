@@ -6,7 +6,7 @@ import time
 import json
 from pathlib import Path
 
-from typing import Tuple, Dict, Callable, List, Optional
+from typing import Tuple, Dict, Callable, Optional
 
 from utils.kgqa_types import APIResponse, StatusInfo
 
@@ -53,7 +53,11 @@ def load_api_config(path: Path) -> Tuple[str, str]:
 
     return base_url, api_key
 
-def list_models(base_url: str, headers: Dict[str, str]) -> APIResponse:
+def list_models(
+    base_url: str,
+    headers: Dict[str, str],
+    session: requests.Session | None = None,
+) -> APIResponse:
     """
     Fetch the list of available models from the API.
 
@@ -67,12 +71,13 @@ def list_models(base_url: str, headers: Dict[str, str]) -> APIResponse:
     Raises:
         HTTPError: If the API request fails.
     """
-    r = requests.get(f"{base_url}/api/models", headers=headers, timeout=30)
-    if r.status_code != 200:
-        print("Status:", r.status_code)
-        print("Body:", r.text)
-    r.raise_for_status()
-    return r.json()
+    requester = session or requests
+    with requester.get(f"{base_url}/api/models", headers=headers, timeout=(5, 30)) as r:
+        if r.status_code != 200:
+            print("Status:", r.status_code)
+            print("Body:", r.text)
+        r.raise_for_status()
+        return r.json()
 
 def chat(
     base_url: str, 
@@ -83,7 +88,11 @@ def chat(
     context_window: int = 4096,
     seed: int | None = None,
     temperature: float | None = None,
-    timeout: int = 120
+    timeout: int = 120,
+    connect_timeout: int = 5,
+    timeout_cooldown: float = 5.0,
+    max_output_tokens: int | None = 256,
+    session: requests.Session | None = None,
 ) -> Tuple[APIResponse, StatusInfo]:
     """
     Send a chat message to the API and get the response.
@@ -97,7 +106,11 @@ def chat(
         context_window (int): Context window size for the model.
         seed (int | None): Optional random seed for the request.
         temperature (float | None): Optional sampling temperature for the request.
-        timeout (int): Timeout in seconds for the API request.
+        timeout (int): Read inactivity timeout in seconds.
+        connect_timeout (int): Connection-establishment timeout in seconds.
+        timeout_cooldown (float): Grace period after a read timeout.
+        max_output_tokens (int | None): Optional generation-token limit.
+        session (requests.Session | None): Optional reusable HTTP session.
 
     Returns:
         Tuple[APIResponse, StatusInfo]: JSON response and status information including success, timeout, or error.
@@ -112,29 +125,86 @@ def chat(
         "options": { "num_ctx": context_window }
     }
 
+    if timeout <= 0 or connect_timeout <= 0:
+        raise ValueError("timeout and connect_timeout must be positive")
+    if timeout_cooldown < 0:
+        raise ValueError("timeout_cooldown must be non-negative")
+    if max_output_tokens is not None and max_output_tokens <= 0:
+        raise ValueError("max_output_tokens must be positive when provided")
+
     if seed is not None:
         payload["options"]["seed"] = int(seed)
     if temperature is not None:
         payload["options"]["temperature"] = float(temperature)
+    if max_output_tokens is not None:
+        payload["options"]["num_predict"] = int(max_output_tokens)
 
-    start_time = time.time()
+    requester = session or requests
+    start_time = time.monotonic()
     try:
-        r = requests.post(f"{base_url}/ollama/api/chat", headers=headers, json=payload, timeout=timeout)
-        if r.status_code != 200:
-            print("Status:", r.status_code)
-            print("Body:", r.text)
-        r.raise_for_status()
-        elapsed_time = time.time() - start_time
-        return r.json(), {"status": "success", "elapsed_time": elapsed_time, "message": "Request successful"}
-    except requests.exceptions.Timeout:
-        elapsed_time = time.time() - start_time
-        return {}, {"status": "timeout", "elapsed_time": elapsed_time, "message": f"Request timed out after {timeout} seconds"}
+        with requester.post(
+            f"{base_url}/ollama/api/chat",
+            headers=headers,
+            json=payload,
+            timeout=(connect_timeout, timeout),
+        ) as r:
+            if r.status_code != 200:
+                print("Status:", r.status_code)
+                print("Body:", r.text)
+            r.raise_for_status()
+            elapsed_time = time.monotonic() - start_time
+            return r.json(), {"status": "success", "elapsed_time": elapsed_time, "message": "Request successful"}
+    except requests.exceptions.ConnectTimeout as e:
+        elapsed_time = time.monotonic() - start_time
+        return {}, {
+            "status": "timeout",
+            "timeout_type": "connect",
+            "elapsed_time": elapsed_time,
+            "message": f"Connection timed out after {connect_timeout} seconds: {e}",
+        }
+    except requests.exceptions.ReadTimeout as e:
+        # Exiting the response context closes the socket and signals cancellation upstream.
+        # Give the proxy/backend time to observe it before the next generation is submitted.
+        elapsed_time = time.monotonic() - start_time
+        if timeout_cooldown > 0:
+            time.sleep(timeout_cooldown)
+
+        recovery = "health probe not attempted"
+        try:
+            with requester.get(
+                f"{base_url}/api/models",
+                headers=headers,
+                timeout=(connect_timeout, min(10, timeout)),
+            ) as probe:
+                recovery = f"OpenWebUI health probe returned HTTP {probe.status_code}"
+        except requests.exceptions.RequestException as probe_error:
+            recovery = f"OpenWebUI health probe failed: {type(probe_error).__name__}: {probe_error}"
+
+        return {}, {
+            "status": "timeout",
+            "timeout_type": "read",
+            "elapsed_time": elapsed_time,
+            "cooldown_seconds": timeout_cooldown,
+            "recovery": recovery,
+            "message": (
+                f"No response data received for {timeout} seconds: {e}. "
+                f"Waited {timeout_cooldown:g}s for cancellation; {recovery}"
+            ),
+        }
+    except requests.exceptions.Timeout as e:
+        elapsed_time = time.monotonic() - start_time
+        return {}, {
+            "status": "timeout",
+            "timeout_type": "unknown",
+            "elapsed_time": elapsed_time,
+            "message": f"Request timed out: {e}",
+        }
     except requests.exceptions.ConnectionError as e:
-        elapsed_time = time.time() - start_time
+        elapsed_time = time.monotonic() - start_time
         print("Error: Connection error occurred.", str(e))
         return {}, {"status": "connection_error", "elapsed_time": elapsed_time, "message": str(e)}
     except Exception as e:
-        elapsed_time = time.time() - start_time
+        elapsed_time = time.monotonic() - start_time
         print("Error: An unexpected error occurred.", str(e))
         return {}, {"status": "error", "elapsed_time": elapsed_time, "message": str(e)}
 

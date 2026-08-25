@@ -66,7 +66,13 @@ def parse_args():
     parser.add_argument('--context-window', type=int, default=4096,
                         help='Context window size for the LLM model.')
     parser.add_argument('--timeout', type=int, default=120,
-                        help='Timeout in seconds for LLM API requests.')
+                        help='Read inactivity timeout in seconds for LLM API requests.')
+    parser.add_argument('--connect-timeout', type=int, default=5,
+                        help='Connection-establishment timeout in seconds.')
+    parser.add_argument('--timeout-cooldown', type=float, default=5.0,
+                        help='Seconds to wait after a read timeout before continuing.')
+    parser.add_argument('--max-output-tokens', type=int, default=256,
+                        help='Maximum number of tokens generated per LLM request.')
     parser.add_argument('--temperature', type=float, default=0,
                         help='Sampling temperature for the LLM (0 = deterministic).')
 
@@ -188,6 +194,9 @@ if __name__ == '__main__':
         seed=args.seed,
         temperature=args.temperature,
         timeout=args.timeout,
+        connect_timeout=args.connect_timeout,
+        timeout_cooldown=args.timeout_cooldown,
+        max_output_tokens=args.max_output_tokens,
         debug=args.debug
     )
 
