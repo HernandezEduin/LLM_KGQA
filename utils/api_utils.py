@@ -1,5 +1,6 @@
 import atexit
 import signal
+import threading
 import requests
 import time
 
@@ -12,6 +13,12 @@ from utils.kgqa_types import APIResponse, StatusInfo
 
 VALID_LLM_BACKENDS = {"openwebui", "ollama"}
 DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
+# A timeout makes the backend/model pair unsafe for another generation until
+# recovery has been confirmed. This state is process-local, matching the
+# sequential benchmark process that owns the HTTP client.
+_DIRTY_BACKENDS: Dict[Tuple[str, str, str], StatusInfo] = {}
+_DIRTY_BACKENDS_LOCK = threading.Lock()
 
 # ---- Config loading ----
 # Existing OpenWebUI configs remain valid and remain the default:
@@ -46,6 +53,42 @@ def _backend_from_headers(headers: Dict[str, str]) -> str:
     """Infer the configured backend from the auth header produced by the base client."""
     authorization = str(headers.get("Authorization", "")).strip()
     return "ollama" if authorization in {"", "Bearer"} else "openwebui"
+
+
+def _backend_key(base_url: str, backend: str, model: str) -> Tuple[str, str, str]:
+    """Return the process-local identity used for dirty/recovery state."""
+    return backend, base_url.rstrip("/"), model
+
+
+def _mark_backend_dirty(
+    base_url: str,
+    backend: str,
+    model: str,
+    reason: StatusInfo,
+) -> None:
+    """Prevent new generations for this backend/model until recovery succeeds."""
+    key = _backend_key(base_url, backend, model)
+    with _DIRTY_BACKENDS_LOCK:
+        _DIRTY_BACKENDS[key] = dict(reason)
+
+
+def _get_backend_dirty_reason(
+    base_url: str,
+    backend: str,
+    model: str,
+) -> StatusInfo | None:
+    """Return a copy of the dirty-state reason, if any."""
+    key = _backend_key(base_url, backend, model)
+    with _DIRTY_BACKENDS_LOCK:
+        reason = _DIRTY_BACKENDS.get(key)
+        return dict(reason) if reason is not None else None
+
+
+def _clear_backend_dirty(base_url: str, backend: str, model: str) -> None:
+    """Clear dirty state only after recovery has been verified."""
+    key = _backend_key(base_url, backend, model)
+    with _DIRTY_BACKENDS_LOCK:
+        _DIRTY_BACKENDS.pop(key, None)
 
 
 def load_api_config(path: Path) -> Tuple[str, str]:
@@ -107,6 +150,14 @@ def chat_endpoint(base_url: str, backend: str) -> str:
     return f"{base_url}/api/chat"
 
 
+def running_models_endpoint(base_url: str, backend: str) -> str:
+    """Return the Ollama running-model endpoint, directly or through OpenWebUI."""
+    backend = validate_backend(backend)
+    if backend == "openwebui":
+        return f"{base_url}/ollama/api/ps"
+    return f"{base_url}/api/ps"
+
+
 def list_models(
     base_url: str,
     headers: Dict[str, str],
@@ -127,6 +178,174 @@ def list_models(
         return r.json()
 
 
+def _running_model_ids(response: APIResponse) -> set[str]:
+    """Extract model identifiers from Ollama's /api/ps response."""
+    running: set[str] = set()
+    if not isinstance(response, dict) or not isinstance(response.get("models"), list):
+        return running
+    for entry in response["models"]:
+        if not isinstance(entry, dict):
+            continue
+        for key in ("model", "name"):
+            value = entry.get(key)
+            if value:
+                running.add(str(value))
+    return running
+
+
+def _canonical_model_name(model: str) -> str:
+    """Normalize the only harmless Ollama tag alias needed for state checks."""
+    model = str(model).strip()
+    return model[:-7] if model.endswith(":latest") else model
+
+
+def _model_is_running(response: APIResponse, model: str) -> bool:
+    """Check whether the selected resolved model is still resident in Ollama."""
+    target = _canonical_model_name(model)
+    return any(_canonical_model_name(candidate) == target for candidate in _running_model_ids(response))
+
+
+def _probe_running_models(
+    base_url: str,
+    headers: Dict[str, str],
+    backend: str,
+    session: requests.Session,
+    connect_timeout: int,
+    read_timeout: float,
+) -> APIResponse:
+    """Fetch Ollama worker/model residency state."""
+    with session.get(
+        running_models_endpoint(base_url, backend),
+        headers=headers,
+        timeout=(connect_timeout, max(0.1, read_timeout)),
+    ) as response:
+        response.raise_for_status()
+        return response.json()
+
+
+def recover_backend(
+    base_url: str,
+    headers: Dict[str, str],
+    model: str,
+    connect_timeout: int = 5,
+    recovery_timeout: float = 30.0,
+    poll_interval: float = 1.0,
+) -> StatusInfo:
+    """
+    Recover a dirty Ollama worker before allowing another generation.
+
+    Recovery uses a fresh HTTP session, asks the selected model to unload with
+    ``keep_alive=0``, then verifies through Ollama's ``/api/ps`` that the model is
+    no longer resident. OpenWebUI uses its transparent ``/ollama/api/*`` proxy for
+    the same native Ollama operations.
+
+    A failed verification leaves the backend dirty. The caller must not submit a
+    new generation in that state.
+    """
+    backend = _backend_from_headers(headers)
+    recovery_timeout = max(float(recovery_timeout), 1.0)
+    poll_interval = max(float(poll_interval), 0.1)
+    start_time = time.monotonic()
+    deadline = start_time + recovery_timeout
+    events = []
+
+    with requests.Session() as recovery_session:
+        # First check: if the model has already disappeared since the timeout,
+        # the backend is safe without submitting any additional model request.
+        try:
+            remaining = max(0.1, deadline - time.monotonic())
+            running = _probe_running_models(
+                base_url,
+                headers,
+                backend,
+                recovery_session,
+                connect_timeout,
+                min(10.0, remaining),
+            )
+            if not _model_is_running(running, model):
+                elapsed = time.monotonic() - start_time
+                return {
+                    "status": "success",
+                    "backend": backend,
+                    "backend_recovered": True,
+                    "recovery_elapsed_time": elapsed,
+                    "recovery_events": ["model already absent from /api/ps"],
+                    "message": "Backend recovery confirmed; model is not running.",
+                }
+            events.append("model still present in /api/ps")
+        except requests.exceptions.RequestException as exc:
+            events.append(f"initial /api/ps probe failed: {type(exc).__name__}: {exc}")
+
+        # Request a real worker reset. If the timed-out generation is still
+        # occupying Ollama, this request may wait behind it; the recovery budget
+        # bounds that wait. We still probe afterwards because the unload may have
+        # completed even if the client-side request timed out near the boundary.
+        unload_payload = {
+            "model": model,
+            "messages": [{"role": "user", "content": ""}],
+            "stream": False,
+            "keep_alive": 0,
+        }
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            try:
+                with recovery_session.post(
+                    chat_endpoint(base_url, backend),
+                    headers=headers,
+                    json=unload_payload,
+                    timeout=(connect_timeout, max(0.1, remaining)),
+                ) as response:
+                    response.raise_for_status()
+                    events.append(f"keep_alive=0 unload returned HTTP {response.status_code}")
+            except requests.exceptions.RequestException as exc:
+                events.append(f"keep_alive=0 unload failed: {type(exc).__name__}: {exc}")
+
+        # Do not infer recovery from HTTP reachability. Only clear the dirty bit
+        # once /api/ps confirms that this model is no longer resident.
+        while time.monotonic() < deadline:
+            remaining = deadline - time.monotonic()
+            try:
+                running = _probe_running_models(
+                    base_url,
+                    headers,
+                    backend,
+                    recovery_session,
+                    connect_timeout,
+                    min(5.0, remaining),
+                )
+                if not _model_is_running(running, model):
+                    elapsed = time.monotonic() - start_time
+                    events.append("model absent from /api/ps")
+                    return {
+                        "status": "success",
+                        "backend": backend,
+                        "backend_recovered": True,
+                        "recovery_elapsed_time": elapsed,
+                        "recovery_events": events,
+                        "message": "Backend recovery confirmed after model unload.",
+                    }
+                events.append("model still present in /api/ps")
+            except requests.exceptions.RequestException as exc:
+                events.append(f"/api/ps verification failed: {type(exc).__name__}: {exc}")
+
+            sleep_for = min(poll_interval, max(0.0, deadline - time.monotonic()))
+            if sleep_for > 0:
+                time.sleep(sleep_for)
+
+    elapsed = time.monotonic() - start_time
+    return {
+        "status": "backend_recovery_failed",
+        "backend": backend,
+        "backend_dirty": True,
+        "recovery_elapsed_time": elapsed,
+        "recovery_events": events,
+        "message": (
+            f"Could not confirm backend recovery within {recovery_timeout:g}s; "
+            "no new generation was submitted."
+        ),
+    }
+
+
 def chat(
     base_url: str,
     headers: Dict[str, str],
@@ -144,12 +363,6 @@ def chat(
 ) -> Tuple[APIResponse, StatusInfo]:
     """Send a non-streaming-compatible chat request to the configured backend."""
     backend = _backend_from_headers(headers)
-    payload = {
-        "model": model,
-        "messages": [{"role": "user", "content": user_text}],
-        "stream": stream,
-        "options": {"num_ctx": context_window},
-    }
 
     if timeout <= 0 or connect_timeout <= 0:
         raise ValueError("timeout and connect_timeout must be positive")
@@ -157,6 +370,31 @@ def chat(
         raise ValueError("timeout_cooldown must be non-negative")
     if max_output_tokens is not None and max_output_tokens <= 0:
         raise ValueError("max_output_tokens must be positive when provided")
+
+    # A previous timeout is a hard barrier. Recover before this request rather
+    # than allowing a new question to queue behind potentially abandoned work.
+    dirty_reason = _get_backend_dirty_reason(base_url, backend, model)
+    recovery_info: StatusInfo | None = None
+    if dirty_reason is not None:
+        recovery_timeout = max(30.0, min(120.0, float(timeout) * 2.0))
+        recovery_info = recover_backend(
+            base_url=base_url,
+            headers=headers,
+            model=model,
+            connect_timeout=connect_timeout,
+            recovery_timeout=recovery_timeout,
+        )
+        if recovery_info.get("status") != "success":
+            recovery_info["dirty_reason"] = dirty_reason
+            return {}, recovery_info
+        _clear_backend_dirty(base_url, backend, model)
+
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": user_text}],
+        "stream": stream,
+        "options": {"num_ctx": context_window},
+    }
 
     if seed is not None:
         payload["options"]["seed"] = int(seed)
@@ -179,65 +417,66 @@ def chat(
                 print("Body:", r.text)
             r.raise_for_status()
             elapsed_time = time.monotonic() - start_time
-            return r.json(), {
+            status: StatusInfo = {
                 "status": "success",
                 "backend": backend,
+                "backend_dirty": False,
                 "elapsed_time": elapsed_time,
                 "message": "Request successful",
             }
+            if recovery_info is not None:
+                status["backend_recovered"] = True
+                status["recovery"] = recovery_info
+            return r.json(), status
     except requests.exceptions.ConnectTimeout as e:
         elapsed_time = time.monotonic() - start_time
-        return {}, {
+        status = {
             "status": "timeout",
             "backend": backend,
+            "backend_dirty": True,
             "timeout_type": "connect",
             "elapsed_time": elapsed_time,
             "message": f"Connection timed out after {connect_timeout} seconds: {e}",
         }
+        _mark_backend_dirty(base_url, backend, model, status)
+        return {}, status
     except requests.exceptions.ReadTimeout as e:
-        # Exiting the response context closes the client-side socket. Give the
-        # selected backend time to observe the disconnect before submitting
-        # another generation, then verify that its HTTP API remains reachable.
+        # Closing the timed-out client request is not treated as proof that the
+        # model stopped. Mark dirty now; the next chat must unload and verify the
+        # worker through /api/ps before it can send another generation.
         elapsed_time = time.monotonic() - start_time
         if timeout_cooldown > 0:
             time.sleep(timeout_cooldown)
 
-        recovery = "health probe not attempted"
-        backend_label = "OpenWebUI" if backend == "openwebui" else "Ollama"
-        try:
-            with requester.get(
-                model_list_endpoint(base_url, backend),
-                headers=headers,
-                timeout=(connect_timeout, min(10, timeout)),
-            ) as probe:
-                recovery = f"{backend_label} health probe returned HTTP {probe.status_code}"
-        except requests.exceptions.RequestException as probe_error:
-            recovery = (
-                f"{backend_label} health probe failed: "
-                f"{type(probe_error).__name__}: {probe_error}"
-            )
-
-        return {}, {
+        status = {
             "status": "timeout",
             "backend": backend,
+            "backend_dirty": True,
             "timeout_type": "read",
             "elapsed_time": elapsed_time,
             "cooldown_seconds": timeout_cooldown,
-            "recovery": recovery,
             "message": (
                 f"No response data received for {timeout} seconds: {e}. "
-                f"Waited {timeout_cooldown:g}s after closing the request; {recovery}"
+                "Backend marked dirty; recovery is required before the next generation."
             ),
         }
+        _mark_backend_dirty(base_url, backend, model, status)
+        return {}, status
     except requests.exceptions.Timeout as e:
         elapsed_time = time.monotonic() - start_time
-        return {}, {
+        status = {
             "status": "timeout",
             "backend": backend,
+            "backend_dirty": True,
             "timeout_type": "unknown",
             "elapsed_time": elapsed_time,
-            "message": f"Request timed out: {e}",
+            "message": (
+                f"Request timed out: {e}. Backend marked dirty; recovery is required "
+                "before the next generation."
+            ),
         }
+        _mark_backend_dirty(base_url, backend, model, status)
+        return {}, status
     except requests.exceptions.ConnectionError as e:
         elapsed_time = time.monotonic() - start_time
         print("Error: Connection error occurred.", str(e))
