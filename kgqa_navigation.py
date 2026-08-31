@@ -43,6 +43,53 @@ from utils.kgqa_navigation_metrics import (
 )
 
 
+def summarize_original_ids(original_ids):
+    """Return a compact JSON-friendly summary of selected original option IDs."""
+    ids = [int(original_id) for original_id in original_ids]
+    if not ids:
+        return {'mode': 'empty', 'count': 0}
+
+    contiguous = all(
+        original_id == ids[0] + offset
+        for offset, original_id in enumerate(ids)
+    )
+    if contiguous:
+        return {
+            'mode': 'range',
+            'count': len(ids),
+            'start': ids[0],
+            'end': ids[-1],
+        }
+
+    if len(ids) <= 20:
+        return {
+            'mode': 'ids',
+            'count': len(ids),
+            'ids': ids,
+        }
+
+    return {
+        'mode': 'preview',
+        'count': len(ids),
+        'min': min(ids),
+        'max': max(ids),
+        'head': ids[:10],
+        'tail': ids[-10:],
+    }
+
+
+def compact_max_actions_truncations(truncations):
+    """Compact verbose shown_original_ids lists without changing selection metadata."""
+    compacted = []
+    for truncation in truncations:
+        record = dict(truncation)
+        original_ids = record.pop('shown_original_ids', None)
+        if original_ids is not None:
+            record['shown_original_ids_summary'] = summarize_original_ids(original_ids)
+        compacted.append(record)
+    return compacted
+
+
 def parse_args():
     parser = argparse.ArgumentParser(description="Iterative KG navigation for QA datasets")
 
@@ -364,7 +411,9 @@ if __name__ == '__main__':
                 'graph_directionality': status_info.get('graph_directionality', 'outgoing'),
                 'max_actions_exceeded': bool(status_info.get('max_actions_exceeded')),
                 'max_actions_truncated': bool(status_info.get('max_actions_truncated')),
-                'max_actions_truncations': status_info.get('max_actions_truncations', []),
+                'max_actions_truncations': compact_max_actions_truncations(
+                    status_info.get('max_actions_truncations', [])
+                ),
                 'context_window_exceeded': bool(status_info.get('context_window_exceeded')),
                 'estimated_prompt_tokens': status_info.get('estimated_prompt_tokens'),
                 'context_window': status_info.get('context_window'),
