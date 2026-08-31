@@ -10,38 +10,75 @@ from typing import Tuple, Dict, Callable, Optional
 
 from utils.kgqa_types import APIResponse, StatusInfo
 
+VALID_LLM_BACKENDS = {"openwebui", "ollama"}
+DEFAULT_OLLAMA_URL = "http://localhost:11434"
+
 # ---- Config loading ----
-# Expected JSON format:
+# Existing OpenWebUI configs remain valid and remain the default:
 # {
 #   "base_url": "http://localhost:8080",
 #   "api_key": "YOUR_API_KEY"
 # }
-
+#
+# For direct Ollama, select it in the same config file:
+# {
+#   "backend": "ollama",
+#   "ollama_url": "http://localhost:11434"
+# }
+#
+# The OpenWebUI fields may remain in the file when backend="ollama", which makes
+# switching between the two backends a one-line config change. Direct local
+# Ollama does not require an API key.
 CONFIG_PATH = Path(__file__).with_name("openwebui_config.json").parent / "configs" / "openwebui_config.json"
+
+
+def validate_backend(backend: str) -> str:
+    """Validate and normalize an LLM backend name."""
+    normalized = str(backend).strip().lower()
+    if normalized not in VALID_LLM_BACKENDS:
+        raise ValueError(
+            f"Unsupported LLM backend '{backend}'. Valid options are: {sorted(VALID_LLM_BACKENDS)}"
+        )
+    return normalized
+
+
+def _backend_from_headers(headers: Dict[str, str]) -> str:
+    """Infer the configured backend from the auth header produced by the base client."""
+    authorization = str(headers.get("Authorization", "")).strip()
+    return "ollama" if authorization in {"", "Bearer"} else "openwebui"
+
 
 def load_api_config(path: Path) -> Tuple[str, str]:
     """
     Load configuration from a JSON file.
 
-    Args:
-        path (Path): Path to the configuration file.
+    Existing configuration files without a ``backend`` field use OpenWebUI.
+    Set ``backend`` to ``ollama`` to use native Ollama directly. In that mode,
+    ``ollama_url`` defaults to ``http://localhost:11434`` and no API key is
+    required.
 
     Returns:
-        Tuple[str, str]: Base URL and API key from the configuration.
-
-    Raises:
-        FileNotFoundError: If the configuration file does not exist.
-        ValueError: If required fields are missing or empty.
+        Tuple[str, str]: Selected backend base URL and API key. Direct Ollama
+        returns an empty API key so the existing base client remains compatible.
     """
     if not path.exists():
         raise FileNotFoundError(
             f"Config file not found: {path}\n"
-            "Create it with:\n"
-            '{\n  "base_url": "http://localhost:8080",\n  "api_key": "YOUR_API_KEY"\n}'
+            "Create it with either:\n"
+            '{\n  "base_url": "http://localhost:8080",\n  "api_key": "YOUR_API_KEY"\n}\n'
+            "or for direct Ollama:\n"
+            '{\n  "backend": "ollama",\n  "ollama_url": "http://localhost:11434"\n}'
         )
 
     with path.open("r", encoding="utf-8") as f:
         cfg = json.load(f)
+
+    backend = validate_backend(cfg.get("backend", "openwebui"))
+    if backend == "ollama":
+        base_url = str(cfg.get("ollama_url", DEFAULT_OLLAMA_URL)).strip().rstrip("/")
+        if not base_url:
+            raise ValueError(f'Missing/empty "ollama_url" in {path}')
+        return base_url, ""
 
     base_url = str(cfg.get("base_url", "")).strip().rstrip("/")
     api_key = str(cfg.get("api_key", "")).strip()
@@ -53,36 +90,47 @@ def load_api_config(path: Path) -> Tuple[str, str]:
 
     return base_url, api_key
 
+
+def model_list_endpoint(base_url: str, backend: str) -> str:
+    """Return the backend-specific model-list endpoint."""
+    backend = validate_backend(backend)
+    if backend == "openwebui":
+        return f"{base_url}/api/models"
+    return f"{base_url}/api/tags"
+
+
+def chat_endpoint(base_url: str, backend: str) -> str:
+    """Return the backend-specific chat endpoint."""
+    backend = validate_backend(backend)
+    if backend == "openwebui":
+        return f"{base_url}/ollama/api/chat"
+    return f"{base_url}/api/chat"
+
+
 def list_models(
     base_url: str,
     headers: Dict[str, str],
     session: requests.Session | None = None,
 ) -> APIResponse:
-    """
-    Fetch the list of available models from the API.
-
-    Args:
-        base_url (str): The base URL of the API.
-        headers (Dict[str, str]): HTTP headers for the request.
-
-    Returns:
-        APIResponse: JSON response containing the list of models.
-
-    Raises:
-        HTTPError: If the API request fails.
-    """
+    """Fetch available models from OpenWebUI or native Ollama."""
+    backend = _backend_from_headers(headers)
     requester = session or requests
-    with requester.get(f"{base_url}/api/models", headers=headers, timeout=(5, 30)) as r:
+    with requester.get(
+        model_list_endpoint(base_url, backend),
+        headers=headers,
+        timeout=(5, 30),
+    ) as r:
         if r.status_code != 200:
             print("Status:", r.status_code)
             print("Body:", r.text)
         r.raise_for_status()
         return r.json()
 
+
 def chat(
-    base_url: str, 
-    headers: Dict[str, str], 
-    model: str, 
+    base_url: str,
+    headers: Dict[str, str],
+    model: str,
     user_text: str,
     stream: bool = False,
     context_window: int = 4096,
@@ -94,35 +142,13 @@ def chat(
     max_output_tokens: int | None = 256,
     session: requests.Session | None = None,
 ) -> Tuple[APIResponse, StatusInfo]:
-    """
-    Send a chat message to the API and get the response.
-
-    Args:
-        base_url (str): The base URL of the API.
-        headers (Dict[str, str]): HTTP headers for the request.
-        model (str): The model ID to use for the chat.
-        user_text (str): The user's input text.
-        stream (bool): Whether to use streaming responses.
-        context_window (int): Context window size for the model.
-        seed (int | None): Optional random seed for the request.
-        temperature (float | None): Optional sampling temperature for the request.
-        timeout (int): Read inactivity timeout in seconds.
-        connect_timeout (int): Connection-establishment timeout in seconds.
-        timeout_cooldown (float): Grace period after a read timeout.
-        max_output_tokens (int | None): Optional generation-token limit.
-        session (requests.Session | None): Optional reusable HTTP session.
-
-    Returns:
-        Tuple[APIResponse, StatusInfo]: JSON response and status information including success, timeout, or error.
-
-    Raises:
-        HTTPError: If the API request fails.
-    """
+    """Send a non-streaming-compatible chat request to the configured backend."""
+    backend = _backend_from_headers(headers)
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
         "stream": stream,
-        "options": { "num_ctx": context_window }
+        "options": {"num_ctx": context_window},
     }
 
     if timeout <= 0 or connect_timeout <= 0:
@@ -143,7 +169,7 @@ def chat(
     start_time = time.monotonic()
     try:
         with requester.post(
-            f"{base_url}/ollama/api/chat",
+            chat_endpoint(base_url, backend),
             headers=headers,
             json=payload,
             timeout=(connect_timeout, timeout),
@@ -153,48 +179,61 @@ def chat(
                 print("Body:", r.text)
             r.raise_for_status()
             elapsed_time = time.monotonic() - start_time
-            return r.json(), {"status": "success", "elapsed_time": elapsed_time, "message": "Request successful"}
+            return r.json(), {
+                "status": "success",
+                "backend": backend,
+                "elapsed_time": elapsed_time,
+                "message": "Request successful",
+            }
     except requests.exceptions.ConnectTimeout as e:
         elapsed_time = time.monotonic() - start_time
         return {}, {
             "status": "timeout",
+            "backend": backend,
             "timeout_type": "connect",
             "elapsed_time": elapsed_time,
             "message": f"Connection timed out after {connect_timeout} seconds: {e}",
         }
     except requests.exceptions.ReadTimeout as e:
-        # Exiting the response context closes the socket and signals cancellation upstream.
-        # Give the proxy/backend time to observe it before the next generation is submitted.
+        # Exiting the response context closes the client-side socket. Give the
+        # selected backend time to observe the disconnect before submitting
+        # another generation, then verify that its HTTP API remains reachable.
         elapsed_time = time.monotonic() - start_time
         if timeout_cooldown > 0:
             time.sleep(timeout_cooldown)
 
         recovery = "health probe not attempted"
+        backend_label = "OpenWebUI" if backend == "openwebui" else "Ollama"
         try:
             with requester.get(
-                f"{base_url}/api/models",
+                model_list_endpoint(base_url, backend),
                 headers=headers,
                 timeout=(connect_timeout, min(10, timeout)),
             ) as probe:
-                recovery = f"OpenWebUI health probe returned HTTP {probe.status_code}"
+                recovery = f"{backend_label} health probe returned HTTP {probe.status_code}"
         except requests.exceptions.RequestException as probe_error:
-            recovery = f"OpenWebUI health probe failed: {type(probe_error).__name__}: {probe_error}"
+            recovery = (
+                f"{backend_label} health probe failed: "
+                f"{type(probe_error).__name__}: {probe_error}"
+            )
 
         return {}, {
             "status": "timeout",
+            "backend": backend,
             "timeout_type": "read",
             "elapsed_time": elapsed_time,
             "cooldown_seconds": timeout_cooldown,
             "recovery": recovery,
             "message": (
                 f"No response data received for {timeout} seconds: {e}. "
-                f"Waited {timeout_cooldown:g}s for cancellation; {recovery}"
+                f"Waited {timeout_cooldown:g}s after closing the request; {recovery}"
             ),
         }
     except requests.exceptions.Timeout as e:
         elapsed_time = time.monotonic() - start_time
         return {}, {
             "status": "timeout",
+            "backend": backend,
             "timeout_type": "unknown",
             "elapsed_time": elapsed_time,
             "message": f"Request timed out: {e}",
@@ -202,59 +241,83 @@ def chat(
     except requests.exceptions.ConnectionError as e:
         elapsed_time = time.monotonic() - start_time
         print("Error: Connection error occurred.", str(e))
-        return {}, {"status": "connection_error", "elapsed_time": elapsed_time, "message": str(e)}
+        return {}, {
+            "status": "connection_error",
+            "backend": backend,
+            "elapsed_time": elapsed_time,
+            "message": str(e),
+        }
     except Exception as e:
         elapsed_time = time.monotonic() - start_time
         print("Error: An unexpected error occurred.", str(e))
-        return {}, {"status": "error", "elapsed_time": elapsed_time, "message": str(e)}
+        return {}, {
+            "status": "error",
+            "backend": backend,
+            "elapsed_time": elapsed_time,
+            "message": str(e),
+        }
+
 
 def extract_model_ids(models_resp: APIResponse) -> Dict[str, str]:
-    """
-    Extract model IDs from the API response.
-
-    Args:
-        models_resp (APIResponse): JSON response containing model data.
-
-    Returns:
-        Dict[str, str]: Model IDs mapped to their names.
-    """
+    """Extract model IDs from OpenWebUI or native Ollama model-list responses."""
     model_ids: Dict[str, str] = {}
 
     if isinstance(models_resp, dict) and isinstance(models_resp.get("data"), list):
+        # OpenWebUI /api/models response.
         for m in models_resp["data"]:
             if isinstance(m, dict):
                 mid = m.get("id")
-                name = m.get("name")
+                name = m.get("name") or mid
                 if mid:
-                    model_ids[name] = mid
+                    model_ids[str(name)] = str(mid)
+    elif isinstance(models_resp, dict) and isinstance(models_resp.get("models"), list):
+        # Native Ollama /api/tags response.
+        for m in models_resp["models"]:
+            if isinstance(m, dict):
+                mid = m.get("model") or m.get("name")
+                name = m.get("name") or m.get("model")
+                if mid:
+                    model_ids[str(name)] = str(mid)
     elif isinstance(models_resp, list):
         for m in models_resp:
             if isinstance(m, dict):
                 mid = m.get("id")
-                name = m.get("name")
+                name = m.get("name") or mid
                 if mid:
-                    model_ids[name] = mid
+                    model_ids[str(name)] = str(mid)
     return model_ids
 
-def pick_model(model_ids: Dict[str, str], choice: str = 'gemma3') -> str:
-    """
-    Select a model ID based on predefined preferences.
 
-    Args:
-        model_ids (Dict[str, str]): Dictionary of model IDs mapped to their names.
+def _model_tokens(value: str) -> set[str]:
+    """Tokenize a model tag for conservative alias matching."""
+    normalized = value.lower().replace(":", "-").replace("_", "-")
+    return {token for token in normalized.split("-") if token}
 
-    Returns:
-        str: Selected model ID.
-    """
 
-    for m in model_ids:
-        if m == choice:
-            return model_ids[m]
-    
-    raise ValueError(f"Model '{choice}' not found in available models.")
+def pick_model(model_ids: Dict[str, str], choice: str = "gemma3") -> str:
+    """Select a model by exact name/ID, with a conservative Ollama-tag fallback."""
+    for name, model_id in model_ids.items():
+        if name == choice or model_id == choice:
+            return model_id
 
-    # Fallback: first available
-    return list(model_ids.values())[0]
+    # Native Ollama tags commonly include parameter size in the tag (for
+    # example qwen2.5:7b-instruct) while this repository requests the logical
+    # alias qwen2.5:instruct. Accept the fallback only when it is unambiguous.
+    requested_tokens = _model_tokens(choice)
+    candidates = []
+    for name, model_id in model_ids.items():
+        candidate_tokens = _model_tokens(f"{name}-{model_id}")
+        if requested_tokens.issubset(candidate_tokens):
+            candidates.append(model_id)
+    unique_candidates = sorted(set(candidates))
+    if len(unique_candidates) == 1:
+        return unique_candidates[0]
+
+    raise ValueError(
+        f"Model '{choice}' not found unambiguously in available models. "
+        f"Available model names: {sorted(model_ids)}"
+    )
+
 
 def unload_model(
     base_url: str,
@@ -262,33 +325,24 @@ def unload_model(
     model: str,
     timeout: int = 30,
 ) -> None:
-    """
-    Ask Ollama (behind OpenWebUI) to unload the model from memory.
-
-    This uses Ollama's `keep_alive=0` behavior to release RAM/VRAM.
-    It is safe to call multiple times and should be best-effort.
-    """
+    """Ask Ollama, directly or through OpenWebUI, to unload a model from memory."""
     try:
-        # Ollama accepts keep_alive on /api/chat (and /api/generate).
+        backend = _backend_from_headers(headers)
         payload = {
             "model": model,
             "messages": [{"role": "user", "content": ""}],
             "stream": False,
-            "keep_alive": 0,  # unload immediately
+            "keep_alive": 0,
         }
         r = requests.post(
-            f"{base_url}/ollama/api/chat",
+            chat_endpoint(base_url, backend),
             headers=headers,
             json=payload,
             timeout=timeout,
         )
-        # Best-effort cleanup; don't raise if shutdown path is already in progress.
-        try:
-            r.close()
-        finally:
-            pass
+        r.close()
     except Exception:
-        # Swallow everything: unloading is a cleanup step and should not mask the real exit.
+        # Unloading is best-effort cleanup and should never mask the real exit.
         pass
 
 
@@ -298,12 +352,7 @@ def register_cleanup_handlers(
     model: str,
     on_cleanup: Optional[Callable[[], None]] = None,
 ) -> None:
-    """
-    Ensure cleanup runs on normal exit, Ctrl+C, and SIGTERM.
-
-    - atexit: runs on normal interpreter shutdown
-    - signal handlers: runs on SIGINT/SIGTERM to unload ASAP
-    """
+    """Ensure backend-aware cleanup runs on normal exit, Ctrl+C, and SIGTERM."""
     def _cleanup() -> None:
         unload_model(base_url, headers, model)
         if on_cleanup is not None:
@@ -312,17 +361,14 @@ def register_cleanup_handlers(
             except Exception:
                 pass
 
-    # 1) Normal interpreter shutdown
     atexit.register(_cleanup)
 
-    # 2) Signals (Ctrl+C is SIGINT; many schedulers send SIGTERM)
     def _handler(signum, frame) -> None:
         _cleanup()
-        raise KeyboardInterrupt  # preserve expected Ctrl+C semantics
+        raise KeyboardInterrupt
 
     for sig in (signal.SIGINT, signal.SIGTERM):
         try:
             signal.signal(sig, _handler)
         except Exception:
-            # Not all environments allow setting handlers (e.g., some notebooks/threads)
             pass
