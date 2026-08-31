@@ -717,6 +717,14 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "completion_tokens": status_info.get("completion_tokens", status_info.get("response_tokens")),
             "total_tokens": status_info.get("total_tokens"),
         }
+        for field in (
+            "backend",
+            "backend_dirty",
+            "backend_recovered_before_request",
+            "recovery",
+        ):
+            if field in status_info:
+                call_record[field] = status_info[field]
         aggregate_status["model_calls"].append(call_record)
         aggregate_status["elapsed_time"] += status_info.get("elapsed_time", 0.0)
 

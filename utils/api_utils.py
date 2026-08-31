@@ -91,6 +91,17 @@ def _clear_backend_dirty(base_url: str, backend: str, model: str) -> None:
         _DIRTY_BACKENDS.pop(key, None)
 
 
+def _attach_recovery_telemetry(
+    status: StatusInfo,
+    recovery_info: StatusInfo | None,
+) -> StatusInfo:
+    """Attach pre-request recovery details to any resulting request status."""
+    if recovery_info is not None:
+        status["backend_recovered_before_request"] = True
+        status["recovery"] = dict(recovery_info)
+    return status
+
+
 def load_api_config(path: Path) -> Tuple[str, str]:
     """
     Load configuration from a JSON file.
@@ -385,6 +396,7 @@ def chat(
             recovery_timeout=recovery_timeout,
         )
         if recovery_info.get("status") != "success":
+            recovery_info["backend_recovered_before_request"] = False
             recovery_info["dirty_reason"] = dirty_reason
             return {}, recovery_info
         _clear_backend_dirty(base_url, backend, model)
@@ -424,10 +436,7 @@ def chat(
                 "elapsed_time": elapsed_time,
                 "message": "Request successful",
             }
-            if recovery_info is not None:
-                status["backend_recovered"] = True
-                status["recovery"] = recovery_info
-            return r.json(), status
+            return r.json(), _attach_recovery_telemetry(status, recovery_info)
     except requests.exceptions.ConnectTimeout as e:
         elapsed_time = time.monotonic() - start_time
         status = {
@@ -438,6 +447,7 @@ def chat(
             "elapsed_time": elapsed_time,
             "message": f"Connection timed out after {connect_timeout} seconds: {e}",
         }
+        _attach_recovery_telemetry(status, recovery_info)
         _mark_backend_dirty(base_url, backend, model, status)
         return {}, status
     except requests.exceptions.ReadTimeout as e:
@@ -460,6 +470,7 @@ def chat(
                 "Backend marked dirty; recovery is required before the next generation."
             ),
         }
+        _attach_recovery_telemetry(status, recovery_info)
         _mark_backend_dirty(base_url, backend, model, status)
         return {}, status
     except requests.exceptions.Timeout as e:
@@ -475,26 +486,29 @@ def chat(
                 "before the next generation."
             ),
         }
+        _attach_recovery_telemetry(status, recovery_info)
         _mark_backend_dirty(base_url, backend, model, status)
         return {}, status
     except requests.exceptions.ConnectionError as e:
         elapsed_time = time.monotonic() - start_time
         print("Error: Connection error occurred.", str(e))
-        return {}, {
+        status = {
             "status": "connection_error",
             "backend": backend,
             "elapsed_time": elapsed_time,
             "message": str(e),
         }
+        return {}, _attach_recovery_telemetry(status, recovery_info)
     except Exception as e:
         elapsed_time = time.monotonic() - start_time
         print("Error: An unexpected error occurred.", str(e))
-        return {}, {
+        status = {
             "status": "error",
             "backend": backend,
             "elapsed_time": elapsed_time,
             "message": str(e),
         }
+        return {}, _attach_recovery_telemetry(status, recovery_info)
 
 
 def extract_model_ids(models_resp: APIResponse) -> Dict[str, str]:
