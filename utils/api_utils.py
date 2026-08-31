@@ -289,32 +289,73 @@ def extract_model_ids(models_resp: APIResponse) -> Dict[str, str]:
 
 
 def _model_tokens(value: str) -> set[str]:
-    """Tokenize a model tag for conservative alias matching."""
+    """Tokenize a model tag for logical variant matching."""
     normalized = value.lower().replace(":", "-").replace("_", "-")
     return {token for token in normalized.split("-") if token}
 
 
+def _quantization_tokens(tokens: set[str]) -> set[str]:
+    """Return compact quantization markers such as q4 or q5 from model tokens."""
+    return {
+        token
+        for token in tokens
+        if token.startswith("q") and token[1:].isdigit()
+    }
+
+
 def pick_model(model_ids: Dict[str, str], choice: str = "gemma3") -> str:
-    """Select a model by exact name/ID, with a conservative Ollama-tag fallback."""
+    """
+    Select a model by exact name/ID or by the repository's logical model variant.
+
+    Native Ollama tags often expose parameter size and quantization details that
+    OpenWebUI hides behind aliases. For example, ``qwen2.5:instruct`` should map
+    to ``qwen2.5:7b-instruct`` rather than becoming ambiguous with its Q4/Q5
+    variants. Likewise, a plain ``qwen2.5`` request should not silently select an
+    instruct-tuned or quantized tag.
+    """
     for name, model_id in model_ids.items():
         if name == choice or model_id == choice:
             return model_id
 
-    # Native Ollama tags commonly include parameter size in the tag (for
-    # example qwen2.5:7b-instruct) while this repository requests the logical
-    # alias qwen2.5:instruct. Accept the fallback only when it is unambiguous.
     requested_tokens = _model_tokens(choice)
+    requested_quantization = _quantization_tokens(requested_tokens)
+    wants_instruct = "instruct" in requested_tokens
     candidates = []
+
     for name, model_id in model_ids.items():
         candidate_tokens = _model_tokens(f"{name}-{model_id}")
-        if requested_tokens.issubset(candidate_tokens):
-            candidates.append(model_id)
+        if not requested_tokens.issubset(candidate_tokens):
+            continue
+
+        candidate_quantization = _quantization_tokens(candidate_tokens)
+        if requested_quantization:
+            # A requested q4/q5/etc. must resolve to exactly that quantization.
+            if candidate_quantization != requested_quantization:
+                continue
+        elif candidate_quantization:
+            # An unquantized logical request must not select a quantized model.
+            continue
+
+        if wants_instruct:
+            if "instruct" not in candidate_tokens:
+                continue
+        elif "instruct" in candidate_tokens:
+            # Plain model aliases refer to the non-instruct/default variant.
+            continue
+
+        candidates.append(model_id)
+
     unique_candidates = sorted(set(candidates))
     if len(unique_candidates) == 1:
         return unique_candidates[0]
 
+    detail = (
+        f" Matching candidates: {unique_candidates}."
+        if unique_candidates
+        else ""
+    )
     raise ValueError(
-        f"Model '{choice}' not found unambiguously in available models. "
+        f"Model '{choice}' not found unambiguously in available models.{detail} "
         f"Available model names: {sorted(model_ids)}"
     )
 
