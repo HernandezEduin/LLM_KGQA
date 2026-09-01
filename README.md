@@ -171,6 +171,8 @@ This project is licensed under the Academic License.
 - [x] Set LLM seed through the backend.
 - [x] Add timeout and retry handling for long LLM calls.
 - [x] Add prompt token estimation and context-window configuration.
+- [x] Add support for multiple LLM backends, including OpenWebUI and Ollama.
+- [ ] Add an option to select thinking mode for LLM calls, which may improve response quality at the cost of more tokens and slower responses. Currently hardcoded into api.
 
 ### Metrics And Evaluation
 

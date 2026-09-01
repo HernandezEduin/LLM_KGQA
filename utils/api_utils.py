@@ -405,6 +405,7 @@ def chat(
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
         "stream": stream,
+        "think": False, # TODO: Consider exposing this option to the user if needed. Note that this consumes more tokens and may be slower, but can improve response quality.
         "options": {"num_ctx": context_window},
     }
 
