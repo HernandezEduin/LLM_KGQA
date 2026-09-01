@@ -8,7 +8,8 @@ valid_models = [
     'gpt-oss', 
     'mixtral', 
     'vicuna', 
-    'phi3'
+    'phi3',
+    'granite3.3'
 ]
 
 has_instruct_versions = {
@@ -20,7 +21,8 @@ has_instruct_versions = {
     'qwen2.5': True, 
     'gpt-oss': False, 
     'mixtral': False, 
-    'phi3': False
+    'phi3': False,
+    'granite3.3': False
 }
 
 has_quantized_versions = {
@@ -32,7 +34,8 @@ has_quantized_versions = {
     'qwen2.5': True, 
     'gpt-oss': False, 
     'mixtral': False, 
-    'phi3': False
+    'phi3': False,
+    'granite3.3': False
 }
 
 context_window_limits = {
@@ -46,4 +49,5 @@ context_window_limits = {
     'mixtral': 32*1024,
     'vicuna': 4*1024,
     'phi3': 128*1024,
+    'granite3.3': 128*1024
 }
