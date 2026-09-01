@@ -119,9 +119,9 @@ def parse_args():
                         help='Read inactivity timeout in seconds for LLM API requests.')
     parser.add_argument('--connect-timeout', type=int, default=5,
                         help='Connection-establishment timeout in seconds.')
-    parser.add_argument('--timeout-cooldown', type=float, default=5.0,
+    parser.add_argument('--timeout-cooldown', type=float, default=0.0,
                         help='Seconds to wait after a read timeout before continuing.')
-    parser.add_argument('--max-output-tokens', type=int, default=256,
+    parser.add_argument('--max-output-tokens', type=int, default=64,
                         help='Maximum number of tokens generated per LLM request.')
     parser.add_argument('--temperature', type=float, default=0,
                         help='Sampling temperature for the LLM (0 = deterministic).')
@@ -158,7 +158,7 @@ def parse_args():
     parser.add_argument('--hybrid-threshold', type=int, default=50,
                         help='Use tuple mode when neighborhood size is <= this threshold, else factorized.')
     # TODO: Recheck this or be more lenient so long as {action=, stop=} is present in the JSON output.
-    parser.add_argument('--max-parse-retries', type=int, default=1,
+    parser.add_argument('--max-parse-retries', type=int, default=2,
                         help='Retry a navigation decision this many times after malformed JSON output.')
 
     parser.add_argument('-d', '--debug', action='store_true',
