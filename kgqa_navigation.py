@@ -160,7 +160,7 @@ def parse_args():
     parser.add_argument('--hybrid-threshold', type=int, default=50,
                         help='Use tuple mode when neighborhood size is <= this threshold, else factorized.')
     # TODO: Recheck this or be more lenient so long as {action=, stop=} is present in the JSON output.
-    parser.add_argument('--max-parse-retries', type=int, default=2,
+    parser.add_argument('--max-parse-retries', type=int, default=0,
                         help='Retry a navigation decision this many times after malformed JSON output.')
     parser.add_argument('--structured-output', action='store_true',
                         help=('Constrain each navigation decision with an Ollama JSON Schema. '
@@ -196,6 +196,8 @@ if __name__ == '__main__':
         raise ValueError('--hybrid-threshold must be non-negative.')
     if args.max_parse_retries < 0:
         raise ValueError('--max-parse-retries must be non-negative.')
+    if args.max_parse_retries != 0 and args.structured_output:
+        raise ValueError('--max-parse-retries != 0 is incompatible with --structured-output, which guarantees valid JSON output.')
     if args.prompting_approach == 'one-shot' and args.n_shots == 0:
         args.n_shots = 1
     if args.prompting_approach == 'io':
@@ -477,7 +479,7 @@ if __name__ == '__main__':
             statistics[hop_size]['avg_accuracy'] = 100 * acc / total if total > 0 else 0
             print(f"Hop Size {hop_size} Entity Accuracy: {acc}/{total} = {statistics[hop_size]['avg_accuracy']:.2f}%")
 
-    result_path = os.path.join(args.result_dir, args.dataset)
+    result_path = os.path.join(args.result_dir, args.dataset, args.prompting_approach.replace('-', '_'))
     os.makedirs(result_path, exist_ok=True)
     model_name = args.llm_model
     if args.use_instruct:
@@ -487,13 +489,13 @@ if __name__ == '__main__':
 
     question_limit_suffix = f"_questions{len(qa_df)}" if args.max_questions is not None else ''
     hybrid_suffix = f"_hybrid{args.hybrid_threshold}" if args.navigation_approach == 'hybrid' else ''
-    max_actions_suffix = (f"_maxactions{args.max_actions}_{args.max_actions_policy}"
+    max_actions_suffix = (f"_maxactions{args.max_actions}_pol-{args.max_actions_policy}"
                           if args.max_actions is not None else '_fullactions')
     structured_suffix = '_structured' if args.structured_output else ''
     results_file = os.path.join(
         result_path,
-        f"results_{args.hops}hop_{model_name}_{args.navigation_approach}_{args.memory_approach}_"
-        f"{prompting_label}_steps{args.max_navigation_steps}{hybrid_suffix}"
+        f"results_{args.hops}hop_{model_name}_{args.navigation_approach}_mem{args.memory_approach}_"
+        f"steps{args.max_navigation_steps}{hybrid_suffix}"
         f"{max_actions_suffix}{structured_suffix}{question_limit_suffix}_seed{args.seed}.json",
     )
 
