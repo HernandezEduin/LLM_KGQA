@@ -4,7 +4,8 @@ valid_models = [
     'llama3', 
     'llama3.1', 
     'deepseek-r1', 
-    'qwen2.5', 
+    'qwen2.5',
+    'qwen3', 
     'gpt-oss', 
     'mixtral', 
     'vicuna', 
@@ -19,6 +20,7 @@ has_instruct_versions = {
     'llama3.1': True, 
     'deepseek-r1': False, 
     'qwen2.5': True, 
+    'qwen3': False, 
     'gpt-oss': False, 
     'mixtral': False, 
     'phi3': False,
@@ -32,6 +34,7 @@ has_quantized_versions = {
     'llama3.1': True, 
     'deepseek-r1': False, 
     'qwen2.5': True, 
+    'qwen3': False, 
     'gpt-oss': False, 
     'mixtral': False, 
     'phi3': False,
@@ -45,9 +48,24 @@ context_window_limits = {
     'llama3.1': 128*1024,
     'deepseek-r1': 128*1024,
     'qwen2.5': 32*1024,
+    'qwen3': 40*1024,
     'gpt-oss': 128*1024,
     'mixtral': 32*1024,
     'vicuna': 4*1024,
     'phi3': 128*1024,
     'granite3.3': 128*1024
+}
+
+has_think_option = {
+    'gemma3': False,
+    'gemma4': True,
+    'llama3': False, 
+    'llama3.1': False, 
+    'deepseek-r1': True, 
+    'qwen2.5': False, 
+    'qwen3': True, 
+    'gpt-oss': True, 
+    'mixtral': False, 
+    'phi3': False, 
+    'granite3.3': False
 }

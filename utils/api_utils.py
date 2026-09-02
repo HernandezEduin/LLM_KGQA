@@ -370,7 +370,7 @@ def chat(
     connect_timeout: int = 5,
     timeout_cooldown: float = 5.0,
     max_output_tokens: int | None = 256,
-    use_think: bool = False,
+    think_option: bool | None = None,
     session: requests.Session | None = None,
 ) -> Tuple[APIResponse, StatusInfo]:
     """Send a non-streaming-compatible chat request to the configured backend."""
@@ -406,10 +406,11 @@ def chat(
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
         "stream": stream,
-        "think": use_think,
         "options": {"num_ctx": context_window},
     }
 
+    if think_option is not None:
+        payload["think"] = bool(think_option)
     if seed is not None:
         payload["options"]["seed"] = int(seed)
     if temperature is not None:

@@ -9,6 +9,7 @@ from model.constants import (
     context_window_limits,
     has_instruct_versions,
     has_quantized_versions,
+    has_think_option,
     valid_models,
 )
 from typing import Dict, Tuple
@@ -159,6 +160,15 @@ class BaseLLMKGQAClient:
                 f"({context_window_limits.get(model_choice)})."
             )
 
+        can_think = has_think_option.get(model_choice, False)
+        think_option = None # model does not support think by default
+        if can_think: # if the model supports think, we can set it to True or False based on user input
+            think_option = use_think
+        elif use_think:
+            raise ValueError(
+                f"Model {model_choice} does not support the 'think' option."
+            )
+
         model_name = model_choice
         if use_instruct and has_instruct_versions.get(model_choice, False):
             model_name += ":instruct"
@@ -175,7 +185,7 @@ class BaseLLMKGQAClient:
         self.context_window = context_window
         self.seed = seed
         self.temperature = temperature
-        self.use_think = use_think
+        self.think_option = think_option
         self.debug = debug
         self.base_url, self.api_key = load_api_config(config_path)
         self.headers = {
@@ -258,7 +268,7 @@ class BaseLLMKGQAClient:
             connect_timeout=self.connect_timeout,
             timeout_cooldown=self.timeout_cooldown,
             max_output_tokens=self.max_output_tokens,
-            use_think=self.use_think,
+            think_option=self.think_option,
             session=self.session,
         )
 
