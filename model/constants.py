@@ -10,7 +10,8 @@ valid_models = [
     'mixtral', 
     'vicuna', 
     'phi3',
-    'granite3.3'
+    'granite3.3',
+    'ministral-3'
 ]
 
 has_instruct_versions = {
@@ -24,7 +25,8 @@ has_instruct_versions = {
     'gpt-oss': False, 
     'mixtral': False, 
     'phi3': False,
-    'granite3.3': False
+    'granite3.3': False,
+    'ministral-3': True
 }
 
 has_quantized_versions = {
@@ -38,7 +40,8 @@ has_quantized_versions = {
     'gpt-oss': False, 
     'mixtral': False, 
     'phi3': False,
-    'granite3.3': False
+    'granite3.3': False,
+    'ministral-3': True
 }
 
 context_window_limits = {
@@ -53,7 +56,8 @@ context_window_limits = {
     'mixtral': 32*1024,
     'vicuna': 4*1024,
     'phi3': 128*1024,
-    'granite3.3': 128*1024
+    'granite3.3': 128*1024,
+    'ministral-3': 256*1024
 }
 
 has_think_option = {
@@ -67,5 +71,6 @@ has_think_option = {
     'gpt-oss': True, 
     'mixtral': False, 
     'phi3': False, 
-    'granite3.3': False
+    'granite3.3': False,
+    'ministral-3': False
 }
