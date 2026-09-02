@@ -371,6 +371,7 @@ def chat(
     timeout_cooldown: float = 5.0,
     max_output_tokens: int | None = 256,
     think_option: bool | None = None,
+    response_format: object | None = None,
     session: requests.Session | None = None,
 ) -> Tuple[APIResponse, StatusInfo]:
     """Send a non-streaming-compatible chat request to the configured backend."""
@@ -411,6 +412,8 @@ def chat(
 
     if think_option is not None:
         payload["think"] = bool(think_option)
+    if response_format is not None:
+        payload["format"] = response_format
     if seed is not None:
         payload["options"]["seed"] = int(seed)
     if temperature is not None:
@@ -436,6 +439,7 @@ def chat(
                 "status": "success",
                 "backend": backend,
                 "backend_dirty": False,
+                "structured_output": response_format is not None,
                 "elapsed_time": elapsed_time,
                 "message": "Request successful",
             }
@@ -446,6 +450,7 @@ def chat(
             "status": "timeout",
             "backend": backend,
             "backend_dirty": True,
+            "structured_output": response_format is not None,
             "timeout_type": "connect",
             "elapsed_time": elapsed_time,
             "message": f"Connection timed out after {connect_timeout} seconds: {e}",
@@ -465,6 +470,7 @@ def chat(
             "status": "timeout",
             "backend": backend,
             "backend_dirty": True,
+            "structured_output": response_format is not None,
             "timeout_type": "read",
             "elapsed_time": elapsed_time,
             "cooldown_seconds": timeout_cooldown,
@@ -482,6 +488,7 @@ def chat(
             "status": "timeout",
             "backend": backend,
             "backend_dirty": True,
+            "structured_output": response_format is not None,
             "timeout_type": "unknown",
             "elapsed_time": elapsed_time,
             "message": (
@@ -498,6 +505,7 @@ def chat(
         status = {
             "status": "connection_error",
             "backend": backend,
+            "structured_output": response_format is not None,
             "elapsed_time": elapsed_time,
             "message": str(e),
         }
@@ -508,6 +516,7 @@ def chat(
         status = {
             "status": "error",
             "backend": backend,
+            "structured_output": response_format is not None,
             "elapsed_time": elapsed_time,
             "message": str(e),
         }
