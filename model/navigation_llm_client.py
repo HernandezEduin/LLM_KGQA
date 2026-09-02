@@ -190,6 +190,79 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             )
         return value
 
+    @staticmethod
+    def navigation_response_schema(num_actions: int) -> Dict[str, Any]:
+        """Build the legal structured-output schema for an action decision.
+
+        A legal decision either selects an in-range action and may stop or continue,
+        or selects no action and must stop at the current entity. In particular,
+        ``{"action": null, "stop": false}`` is excluded by construction.
+        """
+        if num_actions < 1:
+            raise ValueError("num_actions must be positive when building a navigation schema.")
+        action_index = {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": num_actions - 1,
+        }
+        return {
+            "type": "object",
+            "oneOf": [
+                {
+                    "properties": {
+                        "action": action_index,
+                        "stop": {"type": "boolean"},
+                    },
+                    "required": ["action", "stop"],
+                    "additionalProperties": False,
+                },
+                {
+                    "properties": {
+                        "action": {"type": "null"},
+                        "stop": {"const": True},
+                    },
+                    "required": ["action", "stop"],
+                    "additionalProperties": False,
+                },
+            ],
+        }
+
+    @staticmethod
+    def relation_response_schema(num_relations: int) -> Dict[str, Any]:
+        """Build the legal structured-output schema for factorized relation selection.
+
+        Selecting a relation always continues to the destination-action stage;
+        stopping is legal only when no relation is selected.
+        """
+        if num_relations < 1:
+            raise ValueError("num_relations must be positive when building a relation schema.")
+        relation_index = {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": num_relations - 1,
+        }
+        return {
+            "type": "object",
+            "oneOf": [
+                {
+                    "properties": {
+                        "relation": relation_index,
+                        "stop": {"const": False},
+                    },
+                    "required": ["relation", "stop"],
+                    "additionalProperties": False,
+                },
+                {
+                    "properties": {
+                        "relation": {"type": "null"},
+                        "stop": {"const": True},
+                    },
+                    "required": ["relation", "stop"],
+                    "additionalProperties": False,
+                },
+            ],
+        }
+
     def prepare_navigation_prompt(
         self,
         question: str,
@@ -679,6 +752,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         step: int,
         current_entity: EntityId,
         aggregate_status: NavigationStatus,
+        response_format: object | None = None,
         trace: TraceFn | None = None,
     ) -> Tuple[str | None, NavigationStatus]:
         """
@@ -691,6 +765,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             step (int): One-based navigation step number.
             current_entity (EntityId): Entity occupied before this stage call.
             aggregate_status (NavigationStatus): Mutable run-level status record.
+            response_format (object | None): Optional structured-output JSON Schema.
             trace (TraceFn | None): Optional sink for verbose prompt/output traces.
 
         Returns:
@@ -702,7 +777,10 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 f"MODEL INPUT\n{prompt}"
             )
 
-        out, status_info = self.chat(user_text=prompt)
+        out, status_info = self.chat(
+            user_text=prompt,
+            response_format=response_format,
+        )
         aggregate_status["actual_llm_calls"] += 1
         status_info.update(self.normalize_usage(out))
         self._accumulate_navigation_usage(aggregate_status, status_info)
@@ -712,6 +790,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "stage": stage,
             "strategy": strategy,
             "status": status_info.get("status"),
+            "structured_output": response_format is not None,
             "elapsed_time": status_info.get("elapsed_time", 0.0),
             "prompt_tokens": status_info.get("prompt_tokens"),
             "completion_tokens": status_info.get("completion_tokens", status_info.get("response_tokens")),
@@ -769,6 +848,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
         prompting_approach: str = "zero-shot",
         hybrid_threshold: int = 50,
         max_parse_retries: int = 1,
+        structured_output: bool = False,
         demonstration_prefix: str = "",
         n_shots: int = 0,
         trace: TraceFn | None = None,
@@ -790,6 +870,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             prompting_approach (str): Prompting mode label for result metadata.
             hybrid_threshold (int): Tuple/factorized switch point for hybrid navigation.
             max_parse_retries (int): Number of schema-correction retries after invalid JSON.
+            structured_output (bool): Whether to constrain navigation responses with JSON Schema.
             demonstration_prefix (str): Optional solved navigation trajectories prepended to action prompts.
             n_shots (int): Number of solved train trajectories included in the prompt prefix.
             trace (TraceFn | None): Optional sink for verbose prompt/output traces.
@@ -846,6 +927,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             "max_actions": max_actions,
             "max_actions_policy": max_actions_policy,
             "max_parse_retries": max_parse_retries,
+            "structured_output": structured_output,
             "logical_decisions": [],
             "logical_decision_count": 0,
             "actual_llm_calls": 0,
@@ -965,6 +1047,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             stage: str,
             strategy: str,
             parser: StageParser,
+            response_format: object | None = None,
         ) -> StageCallResult:
             # Retries are used only to repair malformed model output for the same decision.
             current_prompt = prompt
@@ -978,6 +1061,7 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                     step=step,
                     current_entity=current_entity,
                     aggregate_status=aggregate_status,
+                    response_format=response_format,
                     trace=trace,
                 )
                 if status_info.get("status") != "success" or content is None:
@@ -1132,11 +1216,17 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 context_failure = fail_context_window(step, "tuple", strategy, prompt)
                 if context_failure is not None:
                     return context_failure
+                tuple_schema = (
+                    self.navigation_response_schema(len(prompted_actions))
+                    if structured_output
+                    else None
+                )
                 decision, content, status_info, parse_exc = call_parse_stage(
                     prompt,
                     stage="tuple",
                     strategy=strategy,
                     parser=lambda raw: self.parse_navigation_decision(raw, len(prompted_actions)),
+                    response_format=tuple_schema,
                 )
                 if status_info.get("status") != "success" or content is None:
                     if parse_exc is not None:
@@ -1214,11 +1304,17 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             context_failure = fail_context_window(step, "relation", strategy, relation_prompt)
             if context_failure is not None:
                 return context_failure
+            relation_schema = (
+                self.relation_response_schema(len(prompted_relation_groups))
+                if structured_output
+                else None
+            )
             relation_decision, relation_content, relation_status, parse_exc = call_parse_stage(
                 relation_prompt,
                 stage="relation",
                 strategy=strategy,
                 parser=lambda raw: self.parse_relation_decision(raw, len(prompted_relation_groups)),
+                response_format=relation_schema,
             )
             if relation_status.get("status") != "success" or relation_content is None:
                 if parse_exc is not None:
@@ -1270,11 +1366,17 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
             context_failure = fail_context_window(step, "relation_action", strategy, action_prompt)
             if context_failure is not None:
                 return context_failure
+            action_schema = (
+                self.navigation_response_schema(len(prompted_relation_actions))
+                if structured_output
+                else None
+            )
             action_decision, action_content, action_status, parse_exc = call_parse_stage(
                 action_prompt,
                 stage="relation_action",
                 strategy=strategy,
                 parser=lambda raw: self.parse_navigation_decision(raw, len(prompted_relation_actions)),
+                response_format=action_schema,
             )
             if action_status.get("status") != "success" or action_content is None:
                 if parse_exc is not None:
@@ -1353,4 +1455,3 @@ class NavigationLLMKGQAClient(BaseLLMKGQAClient):
                 "used as prediction."
             ),
         )
-
