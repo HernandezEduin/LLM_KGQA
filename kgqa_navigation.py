@@ -162,6 +162,9 @@ def parse_args():
     # TODO: Recheck this or be more lenient so long as {action=, stop=} is present in the JSON output.
     parser.add_argument('--max-parse-retries', type=int, default=2,
                         help='Retry a navigation decision this many times after malformed JSON output.')
+    parser.add_argument('--structured-output', action='store_true',
+                        help=('Constrain each navigation decision with an Ollama JSON Schema. '
+                              'The schema permits only legal action/relation IDs and valid stop combinations.'))
 
     parser.add_argument('-d', '--debug', action='store_true',
                         help='Enable debug mode with verbose output.')
@@ -303,6 +306,7 @@ if __name__ == '__main__':
                 prompting_approach=prompting_label,
                 hybrid_threshold=args.hybrid_threshold,
                 max_parse_retries=args.max_parse_retries,
+                structured_output=args.structured_output,
                 demonstration_prefix=demonstration_prefix,
                 n_shots=args.n_shots,
                 trace=pbar.write if args.show_navigation else None,
@@ -393,6 +397,7 @@ if __name__ == '__main__':
                 'max_actions': status_info.get('max_actions', args.max_actions),
                 'max_actions_policy': status_info.get('max_actions_policy', args.max_actions_policy),
                 'max_parse_retries': status_info.get('max_parse_retries', args.max_parse_retries),
+                'structured_output': bool(status_info.get('structured_output', args.structured_output)),
                 'logical_decisions': status_info.get('logical_decisions', []),
                 'logical_decision_count': status_info.get('logical_decision_count', 0),
                 'actual_llm_calls': status_info.get('actual_llm_calls', 0),
@@ -484,11 +489,12 @@ if __name__ == '__main__':
     hybrid_suffix = f"_hybrid{args.hybrid_threshold}" if args.navigation_approach == 'hybrid' else ''
     max_actions_suffix = (f"_maxactions{args.max_actions}_{args.max_actions_policy}"
                           if args.max_actions is not None else '_fullactions')
+    structured_suffix = '_structured' if args.structured_output else ''
     results_file = os.path.join(
         result_path,
         f"results_{args.hops}hop_{model_name}_{args.navigation_approach}_{args.memory_approach}_"
         f"{prompting_label}_steps{args.max_navigation_steps}{hybrid_suffix}"
-        f"{max_actions_suffix}{question_limit_suffix}_seed{args.seed}.json",
+        f"{max_actions_suffix}{structured_suffix}{question_limit_suffix}_seed{args.seed}.json",
     )
 
     payload = {
@@ -520,6 +526,7 @@ if __name__ == '__main__':
             'max_actions_policy': args.max_actions_policy,
             'hybrid_threshold': args.hybrid_threshold,
             'max_parse_retries': args.max_parse_retries,
+            'structured_output': args.structured_output,
             'graph_directionality': 'outgoing',
             'title_mapping': title_mapping_status,
             'max_questions': args.max_questions,
