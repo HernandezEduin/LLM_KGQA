@@ -1,6 +1,6 @@
 from collections import defaultdict
 from random import Random
-from typing import Tuple
+from typing import Optional, Set, Tuple
 
 from utils.kgqa_types import (
     EntityId,
@@ -82,7 +82,72 @@ def build_relation_index(
     for h, r, t in full_graph:
         relation_index.setdefault(r, {}).setdefault(h, []).append((h, r, t))
 
+    for relation_heads in relation_index.values():
+        for head in relation_heads:
+            relation_heads[head].sort(key=lambda triplet: triplet[2])
+
     return relation_index
+
+
+class RelationEntityGrapher:
+    """Graph-level relation-chain traversal with a lazily built relation index.
+
+    Normal navigation uses the separately built outgoing-action index and does not
+    require this relation-indexed representation. The index is therefore allocated
+    only when demonstrations or semantic path-fidelity evaluation request it.
+    """
+
+    def __init__(self, full_graph: TripletCollection) -> None:
+        self.full_graph = full_graph
+        self._relation_index: Optional[RelationIndex] = None
+
+    def get_relation_index(self) -> RelationIndex:
+        """Build and cache the relation/head index on first use."""
+        if self._relation_index is None:
+            self._relation_index = build_relation_index(self.full_graph)
+        return self._relation_index
+
+    def clear_relation_index(self) -> None:
+        """Release the lazily created relation index cache."""
+        self._relation_index = None
+
+    def find_paths_by_relation_chain(
+        self,
+        start_entity: EntityId,
+        relation_chain: RelationChain,
+        target_entities: Optional[Set[EntityId]] = None,
+    ) -> PathList:
+        """Enumerate paths following an exact directed relation sequence.
+
+        Every returned path starts at ``start_entity`` and follows
+        ``relation_chain`` exactly. When ``target_entities`` is supplied, paths are
+        retained only when their final entity belongs to that valid-answer set.
+        """
+        if not relation_chain:
+            return []
+
+        targets = None if target_entities is None else set(target_entities)
+        relation_index = self.get_relation_index()
+        frontier: list[tuple[EntityId, Path]] = [(start_entity, [])]
+
+        for relation in relation_chain:
+            next_frontier: list[tuple[EntityId, Path]] = []
+            seen_paths = set()
+            for current_entity, current_path in frontier:
+                for triplet in relation_index.get(relation, {}).get(current_entity, []):
+                    next_path = current_path + [triplet]
+                    path_key = tuple(next_path)
+                    if path_key in seen_paths:
+                        continue
+                    seen_paths.add(path_key)
+                    next_frontier.append((triplet[2], next_path))
+            frontier = next_frontier
+            if not frontier:
+                break
+
+        if targets is None:
+            return [path for _, path in frontier]
+        return [path for final_entity, path in frontier if final_entity in targets]
 
 def random_subgraph_sampling(
     full_graph: TripletSet,
