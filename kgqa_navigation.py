@@ -102,6 +102,8 @@ def parse_args():
                         help='QA dataset hop split to evaluate.')
     parser.add_argument('--max-questions', type=int, default=None,
                         help='Process only the first N test questions (must be positive).')
+    parser.add_argument('--question-idxs', type=int, nargs='+', default=None,
+                        help='Process only the questions at these indices (0-based). Overrides --max-questions.')
 
     # LLM parameters
     parser.add_argument('--llm-model', type=str, default='gemma3',
@@ -186,6 +188,8 @@ if __name__ == '__main__':
         raise ValueError('--max-navigation-steps must be non-negative.')
     if args.max_questions is not None and args.max_questions < 1:
         raise ValueError('--max-questions must be positive.')
+    if args.question_idxs is not None and any(idx < 0 for idx in args.question_idxs):
+        raise ValueError('--question-idxs must be non-negative.')
     if args.max_actions is not None and args.max_actions < 1:
         raise ValueError('--max-actions must be positive when provided.')
     if args.n_shots < 0:
@@ -226,7 +230,10 @@ if __name__ == '__main__':
     qa_all_df = load_pandas(qa_file)
     train_df = qa_all_df[qa_all_df['SplitLabel'] == 'train'].copy()
     qa_df = qa_all_df[qa_all_df['SplitLabel'] == 'test'].copy() # TODO: Add an option to evaluate on validation split for hyperparameter tuning.
-    if args.max_questions is not None:
+    if args.question_idxs is not None:
+        qa_df = qa_df[qa_df['Question-Number'].isin(args.question_idxs)].copy()
+        args.max_questions = len(qa_df)
+    elif args.max_questions is not None:
         qa_df = qa_df.head(args.max_questions).copy()
 
     # TODO: Adjust the code to also accept multiple answer, currently only single answer with single valid path is supported.
@@ -489,9 +496,9 @@ if __name__ == '__main__':
 
     question_limit_suffix = f"_questions{len(qa_df)}" if args.max_questions is not None else ''
     hybrid_suffix = f"_hybrid{args.hybrid_threshold}" if args.navigation_approach == 'hybrid' else ''
-    max_actions_suffix = (f"_maxactions{args.max_actions}_pol-{args.max_actions_policy}"
+    max_actions_suffix = (f"_maxactions{args.max_actions}_pol{args.max_actions_policy}"
                           if args.max_actions is not None else '_fullactions')
-    structured_suffix = '_structured' if args.structured_output else ''
+    structured_suffix = '_structured' if args.structured_output else '_unstructured'
     results_file = os.path.join(
         result_path,
         f"results_{args.hops}hop_{model_name}_{args.navigation_approach}_mem{args.memory_approach}_"
