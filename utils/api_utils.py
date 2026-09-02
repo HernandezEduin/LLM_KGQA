@@ -370,6 +370,7 @@ def chat(
     connect_timeout: int = 5,
     timeout_cooldown: float = 5.0,
     max_output_tokens: int | None = 256,
+    use_think: bool = False,
     session: requests.Session | None = None,
 ) -> Tuple[APIResponse, StatusInfo]:
     """Send a non-streaming-compatible chat request to the configured backend."""
@@ -405,7 +406,7 @@ def chat(
         "model": model,
         "messages": [{"role": "user", "content": user_text}],
         "stream": stream,
-        "think": False, # TODO: Consider exposing this option to the user if needed. Note that this consumes more tokens and may be slower, but can improve response quality.
+        "think": use_think,
         "options": {"num_ctx": context_window},
     }
 

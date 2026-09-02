@@ -126,6 +126,7 @@ class BaseLLMKGQAClient:
         connect_timeout: int = 5,
         timeout_cooldown: float = 5.0,
         max_output_tokens: int | None = 256,
+        use_think: bool = False,
         debug: bool = False,
     ) -> None:
         """
@@ -144,6 +145,7 @@ class BaseLLMKGQAClient:
             connect_timeout (int): Connection-establishment timeout in seconds.
             timeout_cooldown (float): Grace period after a read timeout.
             max_output_tokens (int | None): Maximum generation length.
+            use_think (bool): Whether to enable "think" mode for the LLM API.
             debug (bool): Enable debug mode for verbose output.
         """
         if model_choice not in valid_models:
@@ -173,6 +175,7 @@ class BaseLLMKGQAClient:
         self.context_window = context_window
         self.seed = seed
         self.temperature = temperature
+        self.use_think = use_think
         self.debug = debug
         self.base_url, self.api_key = load_api_config(config_path)
         self.headers = {
@@ -255,6 +258,7 @@ class BaseLLMKGQAClient:
             connect_timeout=self.connect_timeout,
             timeout_cooldown=self.timeout_cooldown,
             max_output_tokens=self.max_output_tokens,
+            use_think=self.use_think,
             session=self.session,
         )
 

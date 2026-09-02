@@ -115,6 +115,8 @@ def parse_args():
                         help='Number of bits for quantization (if using quantized model).')
     parser.add_argument('--context-window', type=int, default=4096,
                         help='Context window size for the LLM model.')
+    parser.add_argument('--use-think', action='store_true',
+                        help='Whether to use the "think" option for the LLM API (may improve quality but consumes more tokens). Not all models support this option.')
     parser.add_argument('--timeout', type=int, default=120,
                         help='Read inactivity timeout in seconds for LLM API requests.')
     parser.add_argument('--connect-timeout', type=int, default=5,
@@ -246,6 +248,7 @@ if __name__ == '__main__':
         connect_timeout=args.connect_timeout,
         timeout_cooldown=args.timeout_cooldown,
         max_output_tokens=args.max_output_tokens,
+        use_think=args.use_think,
         debug=args.debug,
     )
 
