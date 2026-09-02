@@ -244,14 +244,17 @@ class BaseLLMKGQAClient:
             print(f"  {index:>2}. {model_id}")
 
     def chat(
-        self, 
-        user_text: str
+        self,
+        user_text: str,
+        response_format: object | None = None,
     ) -> Tuple[APIResponse, StatusInfo]:
         """
         Send a chat message to the API and get the response.
 
         Args:
             user_text (str): The user's input text.
+            response_format (object | None): Optional backend response-format constraint,
+                such as an Ollama JSON Schema.
 
         Returns:
             Tuple[APIResponse, StatusInfo]: JSON response and status metadata from the API.
@@ -269,6 +272,7 @@ class BaseLLMKGQAClient:
             timeout_cooldown=self.timeout_cooldown,
             max_output_tokens=self.max_output_tokens,
             think_option=self.think_option,
+            response_format=response_format,
             session=self.session,
         )
 
