@@ -16,7 +16,7 @@ from tqdm import tqdm
 from model.navigation_llm_client import NavigationLLMKGQAClient
 from model.constants import valid_models
 from utils.basic import extract_literals, load_pandas, load_triplets
-from utils.graph_utils import build_outgoing_index, build_relation_index
+from utils.graph_utils import RelationEntityGrapher, build_outgoing_index
 from utils.kgqa_data_utils import (
     get_row_value,
     normalize_answer_entities,
@@ -88,6 +88,13 @@ def compact_max_actions_truncations(truncations):
             record['shown_original_ids_summary'] = summarize_original_ids(original_ids)
         compacted.append(record)
     return compacted
+
+
+def is_multi_answer_value(value):
+    """Return whether a dataset cell encodes the multi-answer list format."""
+    if isinstance(value, (list, tuple, set)):
+        return True
+    return isinstance(value, str) and value.strip().startswith('[')
 
 
 def parse_args():
@@ -225,7 +232,8 @@ if __name__ == '__main__':
     all_triplets_df = load_triplets(triplet_file)
     all_triplets = set(tuple(triplet) for triplet in all_triplets_df.values)
     outgoing_index = build_outgoing_index(all_triplets) # TODO: Add an option to build bidirectional index for other datasets. For now, only outgoing edges are used for MQuAKE and kinship_v2.
-    relation_index = build_relation_index(all_triplets)
+    grapher = RelationEntityGrapher(all_triplets)
+    relation_index = grapher.get_relation_index() if args.n_shots > 0 else {}
 
     qa_all_df = load_pandas(qa_file)
     train_df = qa_all_df[qa_all_df['SplitLabel'] == 'train'].copy()
@@ -236,8 +244,7 @@ if __name__ == '__main__':
     elif args.max_questions is not None:
         qa_df = qa_df.head(args.max_questions).copy()
 
-    # TODO: Adjust the code to also accept multiple answer, currently only single answer with single valid path is supported.
-    # check if answers are lists (multi-answer) or single values, and adjust accordingly
+    # Normalize list-valued answer columns used by multi-answer datasets.
     if not qa_df.empty and qa_df['Answer'].apply(
         lambda value: isinstance(value, str) and value.strip().startswith('[')
     ).all():
@@ -280,6 +287,9 @@ if __name__ == '__main__':
         demo_max_actions=args.demo_max_actions,
         seed=args.seed,
     )
+    # Demonstration construction is complete; semantic test evaluation can rebuild
+    # this index lazily later if a multi-answer row actually requires it.
+    grapher.clear_relation_index()
 
     statistics = {'overall': initialize_statistics(total=len(qa_df))}
     if args.hops == 'n' and 'Hops' in qa_df.columns:
@@ -323,9 +333,29 @@ if __name__ == '__main__':
 
             predicted_path = status_info.get('predicted_path', [])
             final_entity = status_info.get('final_entity')
+            raw_answer_entities = row['Answer-Entity']
+            valid_answer_entities = normalize_answer_entities(raw_answer_entities)
             reference_paths = normalize_reference_paths(row['Paths']) if 'Paths' in qa_df.columns else []
             relation_chain = normalize_relation_chain(row['Path-Key']) if 'Path-Key' in qa_df.columns else None
-            valid_answer_entities = normalize_answer_entities(row['Answer-Entity'])
+            reference_path_source = 'dataset_paths' if reference_paths else None
+
+            # Match MINERVA's multi-answer semantics when exhaustive entity-level
+            # paths are not stored: lazily enumerate all graph realizations that
+            # follow the annotated relation chain exactly and end at a valid answer.
+            if (
+                not reference_paths
+                and relation_chain is not None
+                and valid_answer_entities
+                and is_multi_answer_value(raw_answer_entities)
+            ):
+                reference_paths = grapher.find_paths_by_relation_chain(
+                    start_entity=start_node,
+                    relation_chain=relation_chain,
+                    target_entities=valid_answer_entities,
+                )
+                if reference_paths:
+                    reference_path_source = 'lazy_relation_chain'
+
             path_score = best_path_fidelity_score(predicted_path, reference_paths, relation_chain)
             answer_entity_score = score_single_final_entity(final_entity, valid_answer_entities) if final_entity is not None else {
                 'Hits1': 0.0,
@@ -377,6 +407,8 @@ if __name__ == '__main__':
                 'gold_answer_entities': sorted(valid_answer_entities),
                 'gold_answer_labels': [entity_title.get(entity, entity) for entity in sorted(valid_answer_entities)],
                 'gold_answer_text': get_row_value(row, 'Answer'),
+                'gold_reference_path_source': reference_path_source,
+                'gold_reference_path_count': len(reference_paths),
                 'predicted_terminal_entity': final_entity,
                 'predicted_terminal_label': entity_title.get(final_entity, final_entity) if final_entity is not None else None,
                 'answer_correct': correct,
@@ -453,6 +485,9 @@ if __name__ == '__main__':
             pbar.set_description(
                 f"Processing Questions (Entity Acc: {statistics['overall']['accuracy']}/{running} = {accuracy:.4f})"
             )
+
+    # Semantic evaluation no longer needs the graph-derived relation index.
+    grapher.clear_relation_index()
 
     for section, metric_values in navigation_metric_scores.items():
         statistics[section]['path_fidelity'] = aggregate_single_prediction_metrics(metric_values['path'])
