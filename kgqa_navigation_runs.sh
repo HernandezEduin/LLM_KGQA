@@ -13,7 +13,9 @@ models=(
     "llama3.1"
     "granite3.3"
     "ministral-3"
-    "deepseek-r1"
+    # "deepseek-r1"
+    "olmo-3"
+    "phi4-mini"
 )
 
 # These models should use their explicit instruct variants.
@@ -21,6 +23,7 @@ requires_instruct=(
     "qwen2.5"
     "llama3.1"
     "ministral-3"
+    "olmo-3"
 )
 
 # These models should use the Q4 variant.
@@ -28,6 +31,7 @@ requires_quantized=(
     "qwen2.5"
     "llama3.1"
     "ministral-3"
+    "olmo-3"
 )
 
 # ============================================================
@@ -36,8 +40,8 @@ requires_quantized=(
 
 datasets=(
     # "kinship_v2"
-    "mquake_single"
-    # "mquake_multi"
+    # "mquake_single"
+    "mquake_multi"
     # "metaqa"
 )
 
