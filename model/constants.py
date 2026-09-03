@@ -11,7 +11,9 @@ valid_models = [
     'vicuna', 
     'phi3',
     'granite3.3',
-    'ministral-3'
+    'ministral-3',
+    'olmo-3',
+    'phi4-mini',
 ]
 
 has_instruct_versions = {
@@ -26,7 +28,9 @@ has_instruct_versions = {
     'mixtral': False, 
     'phi3': False,
     'granite3.3': False,
-    'ministral-3': True
+    'ministral-3': True,
+    'olmo-3': True,
+    'phi4-mini': False,
 }
 
 has_quantized_versions = {
@@ -41,7 +45,9 @@ has_quantized_versions = {
     'mixtral': False, 
     'phi3': False,
     'granite3.3': False,
-    'ministral-3': True
+    'ministral-3': True,
+    'olmo-3': True,
+    'phi4-mini': False,
 }
 
 context_window_limits = {
@@ -57,7 +63,9 @@ context_window_limits = {
     'vicuna': 4*1024,
     'phi3': 128*1024,
     'granite3.3': 128*1024,
-    'ministral-3': 256*1024
+    'ministral-3': 256*1024,
+    'olmo-3': 6*1024,
+    'phi4-mini': 128*1024,
 }
 
 has_think_option = {
@@ -72,5 +80,7 @@ has_think_option = {
     'mixtral': False, 
     'phi3': False, 
     'granite3.3': False,
-    'ministral-3': False
+    'ministral-3': False,
+    'olmo-3': False,
+    'phi4-mini': False,
 }
