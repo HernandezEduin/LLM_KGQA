@@ -177,8 +177,8 @@ This project is licensed under the Academic License.
 ### Metrics And Evaluation
 
 - [ ] Revisit path-fidelity metrics and document the intended PED, RED, F1_SG, and F1_REL behavior.
-- [ ] Ensure PED and F1_SG correctly support multiple gold answers and multiple valid evidence paths.
-- [ ] Support multiple-answer and multiple-valid-path navigation evaluation end to end.
+- [x] Ensure PED and F1_SG correctly support multiple gold answers and multiple valid evidence paths.
+- [x] Support multiple-answer and multiple-valid-path navigation evaluation end to end.
 - [ ] Add validation-split evaluation for navigation hyperparameter tuning.
 - [ ] Revisit final-answer cleanup punctuation rules so abbreviations such as `U.S.A.` are not corrupted.
 - [ ] Add regression tests for navigation termination reasons, parse retries, max-action truncation, and context-window failures.
@@ -188,7 +188,7 @@ This project is licensed under the Academic License.
 
 - [ ] Add dataset compatibility checks for required columns and optional fields before launching long runs.
 - [ ] Allow configurable title-map column names, such as `QID`/`Property` or `EID`/`RID`, for datasets like MetaQA.
-- [ ] Decide whether navigation parsing should accept JSON responses with `action` and `stop` plus extra fields, or continue requiring the exact schema.
+- [x] Decide whether navigation parsing should accept JSON responses with `action` and `stop` plus extra fields, or continue requiring the exact schema.
 - [ ] Add support notes or adapters for additional KGQA datasets such as MetaQA and PathQuestion.
 - [x] Support datasets with optional entity/relation title mappings.
 - [x] Split shared LLM client logic from subgraph and navigation task clients.
