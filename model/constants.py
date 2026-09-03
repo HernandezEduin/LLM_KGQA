@@ -46,7 +46,7 @@ has_quantized_versions = {
     'phi3': False,
     'granite3.3': False,
     'ministral-3': True,
-    'olmo-3': True,
+    'olmo-3': False,
     'phi4-mini': False,
 }
 
@@ -64,7 +64,7 @@ context_window_limits = {
     'phi3': 128*1024,
     'granite3.3': 128*1024,
     'ministral-3': 256*1024,
-    'olmo-3': 6*1024,
+    'olmo-3': 64*1024,
     'phi4-mini': 128*1024,
 }
 
