@@ -11,7 +11,8 @@ Each run contributes:
     - one Overall row
     - one row per available hop
 
-Only paper-relevant metrics are included.
+The output keeps the main paper metrics together with a compact set of
+trajectory and efficiency diagnostics that are useful for analysis.
 """
 
 import argparse
@@ -20,11 +21,38 @@ import json
 from pathlib import Path
 
 
-METRICS = [
+PATH_METRICS = [
     "PED",
     "RED",
     "F1_SG",
     "F1_REL",
+]
+
+# PATH_DIAGNOSTICS = [
+#     "path_exact_match",
+#     "relation_chain_exact_match",
+#     "relation_prefix_recall",
+#     "triplet_prefix_recall",
+#     "predicted_path_length",
+#     "reference_path_length",
+# ]
+
+EFFICIENCY_METRICS = [
+    "actual_llm_calls",
+    "logical_decisions",
+    "executed_graph_edges",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "total_seconds",
+]
+
+ERROR_METRICS = [
+    "unknown",
+    "timeouts",
+    "errors",
+    "max_actions_exceeded",
+    "max_actions_truncated",
 ]
 
 
@@ -91,6 +119,15 @@ def output_format(config):
     )
 
 
+def termination_value(section_stats, reason):
+    termination_reasons = section_stats.get("termination_reasons", {})
+
+    if not isinstance(termination_reasons, dict):
+        return None
+
+    return termination_reasons.get(reason, 0)
+
+
 def make_row(
     config,
     section_name,
@@ -122,11 +159,34 @@ def make_row(
         "Format": output_format(config),
         "Hop": section_name,
         "N": section_stats.get("running_count"),
+        "Correct": answer_stats.get(
+            "correct",
+            section_stats.get("accuracy"),
+        ),
         "Accuracy": 100 * accuracy,
     }
 
-    for metric in METRICS:
+    # Main paper path-fidelity metrics.
+    for metric in PATH_METRICS:
         row[metric] = path_stats.get(metric)
+
+    # Per-question means already produced by avg_dict() in the runner.
+    for metric in EFFICIENCY_METRICS:
+        row[metric] = section_stats.get(metric)
+
+    # Error / interface diagnostics.
+    for metric in ERROR_METRICS:
+        row[metric] = section_stats.get(metric)
+
+    # Compact termination summary.
+    row["termination_llm_stop"] = termination_value(
+        section_stats,
+        "llm_stop",
+    )
+    row["termination_max_steps"] = termination_value(
+        section_stats,
+        "max_steps",
+    )
 
     row["Source"] = source_file.name
 
@@ -187,6 +247,7 @@ def compile_file(path, dataset):
 
     return rows
 
+
 def find_result_files(dataset_dir: Path):
     """
     Find experiment result JSON files.
@@ -214,6 +275,7 @@ def find_result_files(dataset_dir: Path):
 
     return sorted(result_files)
 
+
 def main():
     args = parse_args()
 
@@ -229,8 +291,6 @@ def main():
     rows = []
 
     for path in result_files:
-        payload = None
-
         try:
             payload = load_result(path)
         except (json.JSONDecodeError, OSError):
@@ -326,11 +386,26 @@ def main():
         "Format",
         "Hop",
         "N",
+        "Correct",
         "Accuracy",
         "PED",
         "RED",
         "F1_SG",
         "F1_REL",
+        "actual_llm_calls",
+        "logical_decisions",
+        "executed_graph_edges",
+        "prompt_tokens",
+        "completion_tokens",
+        "total_tokens",
+        "total_seconds",
+        "termination_llm_stop",
+        "termination_max_steps",
+        "unknown",
+        "timeouts",
+        "errors",
+        "max_actions_exceeded",
+        "max_actions_truncated",
         "Source",
     ]
 
