@@ -1,6 +1,11 @@
 """Preview max-action policies on real dataset questions without calling an LLM."""
 import argparse
 import os
+import sys
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT_DIR)
+
 from utils.action_selection import _score, _tokens, select_options
 from utils.basic import load_pandas, load_triplets
 from utils.graph_utils import build_outgoing_index

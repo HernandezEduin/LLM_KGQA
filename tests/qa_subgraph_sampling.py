@@ -4,6 +4,12 @@ import json
 import time
 import pandas as pd
 
+import sys
+import os
+
+ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, ROOT_DIR)
+
 from utils.basic import load_triplets, extract_literals
 from utils.kgqa_utils import translate_path
 from utils.graph_utils import (

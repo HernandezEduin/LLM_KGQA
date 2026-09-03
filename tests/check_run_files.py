@@ -2,8 +2,8 @@ import ast
 
 if __name__=='__main__':
     # Example usage
-    file_dir_one = '/tmp/neighborhood_1.txt'
-    file_dir_two = '/tmp/neighborhood_2.txt'
+    file_dir_one = '../tmp/neighborhood_1.txt'
+    file_dir_two = '../tmp/neighborhood_2.txt'
 
     with open(file_dir_one, 'r', encoding='utf-8') as f:
         lines_one = [line.strip() for line in f if line.strip()]

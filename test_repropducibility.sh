@@ -1,6 +1,6 @@
 # run twice with same settings and compare outputs
-python qa_subgraph_sampling.py --dataset mquake --hops n --sampling-method random -r --seed 30 > /tmp/neighborhood_1.txt
-python qa_subgraph_sampling.py --dataset mquake --hops n --sampling-method random -r --seed 30 > /tmp/neighborhood_2.txt
+python ./test/qa_subgraph_sampling.py --dataset mquake --hops n --sampling-method random -r --seed 30 > /tmp/neighborhood_1.txt
+python ./test/qa_subgraph_sampling.py --dataset mquake --hops n --sampling-method random -r --seed 30 > /tmp/neighborhood_2.txt
 diff /tmp/neighborhood_1.txt /tmp/neighborhood_2.txt > /tmp/neighborhood_diff.txt
 # if files are exactly the same, diff file will be empty, else it will contain the differences
 if [ -s /tmp/neighborhood_diff.txt ]; then
