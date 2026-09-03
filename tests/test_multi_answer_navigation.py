@@ -5,7 +5,7 @@ import os
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT_DIR)
 
-from utils.graph_utils import RelationEntityGrapher
+from utils.graph_utils import Grapher
 from utils.kgqa_navigation_metrics import (
     score_path_fidelity_against_references,
     score_single_final_entity,
@@ -22,7 +22,7 @@ class MultiAnswerNavigationTests(unittest.TestCase):
             ('a', 'wrong', 'y'),
             ('s', 'other', 'b'),
         }
-        self.grapher = RelationEntityGrapher(self.graph)
+        self.grapher = Grapher(self.graph)
         self.relation_chain = ['r1', 'r2']
 
     def test_relation_index_is_lazy_and_releasable(self):

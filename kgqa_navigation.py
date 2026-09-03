@@ -16,7 +16,7 @@ from tqdm import tqdm
 from model.navigation_llm_client import NavigationLLMKGQAClient
 from model.constants import valid_models
 from utils.basic import extract_literals, load_pandas, load_triplets
-from utils.graph_utils import RelationEntityGrapher, build_outgoing_index
+from utils.graph_utils import Grapher, build_outgoing_index
 from utils.kgqa_data_utils import (
     get_row_value,
     normalize_answer_entities,
@@ -88,13 +88,6 @@ def compact_max_actions_truncations(truncations):
             record['shown_original_ids_summary'] = summarize_original_ids(original_ids)
         compacted.append(record)
     return compacted
-
-
-def is_multi_answer_value(value):
-    """Return whether a dataset cell encodes the multi-answer list format."""
-    if isinstance(value, (list, tuple, set)):
-        return True
-    return isinstance(value, str) and value.strip().startswith('[')
 
 
 def parse_args():
@@ -232,7 +225,7 @@ if __name__ == '__main__':
     all_triplets_df = load_triplets(triplet_file)
     all_triplets = set(tuple(triplet) for triplet in all_triplets_df.values)
     outgoing_index = build_outgoing_index(all_triplets) # TODO: Add an option to build bidirectional index for other datasets. For now, only outgoing edges are used for MQuAKE and kinship_v2.
-    grapher = RelationEntityGrapher(all_triplets)
+    grapher = Grapher(all_triplets)
     relation_index = grapher.get_relation_index() if args.n_shots > 0 else {}
 
     qa_all_df = load_pandas(qa_file)
@@ -244,12 +237,20 @@ if __name__ == '__main__':
     elif args.max_questions is not None:
         qa_df = qa_df.head(args.max_questions).copy()
 
-    # Normalize list-valued answer columns used by multi-answer datasets.
+    is_multi_answer = False
+    # check if answers are lists (multi-answer) or single values, and adjust accordingly
     if not qa_df.empty and qa_df['Answer'].apply(
         lambda value: isinstance(value, str) and value.strip().startswith('[')
     ).all():
         qa_df['Answer'] = extract_literals(qa_df['Answer'])
         qa_df['Answer-Entity'] = extract_literals(qa_df['Answer-Entity'])
+        is_multi_answer = True
+
+    use_semantic_multi_path_eval = (
+        is_multi_answer
+        and 'Path-Key' in qa_df.columns
+        and 'Paths' not in qa_df.columns
+    )
 
     qa_df = qa_df.reset_index(drop=False).rename(columns={'index': 'dataframe_index'})
 
@@ -342,12 +343,7 @@ if __name__ == '__main__':
             # Match MINERVA's multi-answer semantics when exhaustive entity-level
             # paths are not stored: lazily enumerate all graph realizations that
             # follow the annotated relation chain exactly and end at a valid answer.
-            if (
-                not reference_paths
-                and relation_chain is not None
-                and valid_answer_entities
-                and is_multi_answer_value(raw_answer_entities)
-            ):
+            if use_semantic_multi_path_eval:
                 reference_paths = grapher.find_paths_by_relation_chain(
                     start_entity=start_node,
                     relation_chain=relation_chain,

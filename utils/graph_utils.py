@@ -89,7 +89,7 @@ def build_relation_index(
     return relation_index
 
 
-class RelationEntityGrapher:
+class Grapher:
     """Graph-level relation-chain traversal with a lazily built relation index.
 
     Normal navigation uses the separately built outgoing-action index and does not
