@@ -21,7 +21,7 @@ from model.model_config import (
     model_result_config,
     validate_runtime_settings,
 )
-from utils.basic import extract_literals, load_pandas, load_triplets
+from utils.basic import load_pandas, load_triplets
 from utils.graph_utils import Grapher, build_outgoing_index
 from utils.kgqa_data_utils import (
     get_row_value,
@@ -538,6 +538,10 @@ if __name__ == '__main__':
             'graph_answer': [],
             'family_ids': [],
             'family_sizes': [],
+            'path_family_ids': [],
+            'path_family_sizes': [],
+            'graph_path_family_ids': [],
+            'graph_path_family_sizes': [],
         }
         for section in statistics
     }
@@ -665,9 +669,15 @@ if __name__ == '__main__':
             for section in metric_sections:
                 if path_score is not None:
                     navigation_metric_scores[section]['path'].append(path_score)
+                    if has_family_metadata:
+                        navigation_metric_scores[section]['path_family_ids'].append(family_id)
+                        navigation_metric_scores[section]['path_family_sizes'].append(family_size)
                 navigation_metric_scores[section]['answer'].append(answer_entity_score)
                 if graph_path_score is not None:
                     navigation_metric_scores[section]['graph_path'].append(graph_path_score)
+                    if has_family_metadata:
+                        navigation_metric_scores[section]['graph_path_family_ids'].append(family_id)
+                        navigation_metric_scores[section]['graph_path_family_sizes'].append(family_size)
                 if graph_answer_entity_score is not None:
                     navigation_metric_scores[section]['graph_answer'].append(graph_answer_entity_score)
                 if has_family_metadata:
@@ -815,8 +825,8 @@ if __name__ == '__main__':
         if has_family_metadata:
             statistics[section]['path_fidelity_family_macro'] = _family_macro_scores(
                 metric_values['path'],
-                metric_values['family_ids'],
-                metric_values['family_sizes'] if has_family_sizes else None,
+                metric_values['path_family_ids'],
+                metric_values['path_family_sizes'] if has_family_sizes else None,
             )
             statistics[section]['final_entity_family_macro'] = aggregate_family_answer_metrics(
                 metric_values['answer'],
@@ -834,8 +844,8 @@ if __name__ == '__main__':
             if has_family_metadata:
                 statistics[section]['graph_path_fidelity_family_macro'] = _family_macro_scores(
                     metric_values['graph_path'],
-                    metric_values['family_ids'],
-                    metric_values['family_sizes'] if has_family_sizes else None,
+                    metric_values['graph_path_family_ids'],
+                    metric_values['graph_path_family_sizes'] if has_family_sizes else None,
                 )
                 statistics[section]['graph_final_entity_family_macro'] = aggregate_family_answer_metrics(
                     metric_values['graph_answer'],
