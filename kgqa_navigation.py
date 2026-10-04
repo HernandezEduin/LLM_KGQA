@@ -7,8 +7,10 @@ edge, and treats the terminal graph entity as the prediction.
 """
 
 import argparse
+import ast
 import json
 import os
+from numbers import Number
 from pathlib import Path
 
 from tqdm import tqdm
@@ -24,8 +26,6 @@ from utils.graph_utils import Grapher, build_outgoing_index
 from utils.kgqa_data_utils import (
     get_row_value,
     normalize_answer_entities,
-    normalize_reference_paths,
-    normalize_relation_chain,
     to_jsonable,
 )
 from utils.kgqa_navigation_utils import (
@@ -45,6 +45,239 @@ from utils.kgqa_navigation_metrics import (
     aggregate_single_prediction_metrics,
     score_single_final_entity,
 )
+
+
+def _parse_literal(value):
+    """Parse a Python-literal string while preserving already-decoded values."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        if not stripped:
+            return None
+        if stripped[0] in '[({':
+            try:
+                return ast.literal_eval(stripped)
+            except (SyntaxError, ValueError):
+                return value
+    return value
+
+
+def _is_triplet(value):
+    """Return True when value structurally resembles one [head, relation, tail] edge."""
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) == 3
+        and not any(isinstance(part, (list, tuple, dict, set)) for part in value)
+    )
+
+
+def _is_path(value):
+    """Return True when value is one non-empty sequence of KG triplets."""
+    return (
+        isinstance(value, (list, tuple))
+        and len(value) > 0
+        and all(_is_triplet(edge) for edge in value)
+    )
+
+
+def flatten_reference_paths(value):
+    """Flatten Paths/Multi-Paths/Graph-Multi-Paths into individual entity paths."""
+    value = _parse_literal(value)
+    paths = []
+
+    def visit(obj):
+        if _is_path(obj):
+            paths.append([tuple(edge) for edge in obj])
+            return
+        if isinstance(obj, (list, tuple)):
+            for child in obj:
+                visit(child)
+
+    visit(value)
+    return paths
+
+
+def normalize_relation_chains(value):
+    """Normalize Path-Key or Multi-Paths-Key into a list of relation chains."""
+    value = _parse_literal(value)
+    if value is None:
+        return []
+
+    if isinstance(value, str):
+        stripped = value.strip()
+        return [stripped.split('->')] if stripped else []
+
+    if not isinstance(value, (list, tuple)) or not value:
+        return []
+
+    # A flat list is one already-tokenized relation chain.
+    if not any(isinstance(item, (list, tuple)) for item in value):
+        # Multi-Paths-Key is commonly serialized as a list of "r1->r2" strings.
+        if all(isinstance(item, str) and '->' in item for item in value):
+            return [item.split('->') for item in value]
+        return [list(value)]
+
+    chains = []
+    for item in value:
+        item = _parse_literal(item)
+        if isinstance(item, str):
+            if item.strip():
+                chains.append(item.strip().split('->'))
+        elif isinstance(item, (list, tuple)) and item:
+            chains.append(list(item))
+    return chains
+
+
+def get_reference_paths(row, graph_scope=False):
+    """Return released or graph-expanded entity-level reference paths."""
+    if graph_scope:
+        column = 'Graph-Multi-Paths'
+        return flatten_reference_paths(row[column]) if column in row and row[column] != '' else []
+
+    if 'Multi-Paths' in row and row['Multi-Paths'] != '':
+        return flatten_reference_paths(row['Multi-Paths'])
+    if 'Paths' in row and row['Paths'] != '':
+        return flatten_reference_paths(row['Paths'])
+    return []
+
+
+def get_reference_relation_chains(row, reference_paths=None):
+    """Return all released relation-chain annotations for one question."""
+    if 'Multi-Paths-Key' in row and row['Multi-Paths-Key'] != '':
+        chains = normalize_relation_chains(row['Multi-Paths-Key'])
+        if chains:
+            return chains
+    if 'Path-Key' in row and row['Path-Key'] != '':
+        chains = normalize_relation_chains(row['Path-Key'])
+        if chains:
+            return chains
+
+    chains = []
+    seen = set()
+    for path in reference_paths or []:
+        chain = tuple(edge[1] for edge in path)
+        if chain and chain not in seen:
+            seen.add(chain)
+            chains.append(list(chain))
+    return chains
+
+
+def score_path_against_references(predicted_path, reference_paths, relation_chains):
+    """Match MINERVA multi-reference semantics for PED/F1_SG and RED/F1_REL."""
+    if not reference_paths and not relation_chains:
+        return None
+
+    # Entity-level metrics are best-reference metrics over all candidate paths.
+    base_chain = relation_chains[0] if relation_chains else None
+    result = best_path_fidelity_score(
+        predicted_path,
+        reference_paths,
+        base_chain,
+    )
+
+    if not relation_chains:
+        relation_chains = get_reference_relation_chains({}, reference_paths)
+
+    if relation_chains:
+        relation_scores = [
+            best_path_fidelity_score(predicted_path, [], chain)
+            for chain in relation_chains
+        ]
+        red_values = [score.get('RED') for score in relation_scores if score and score.get('RED') is not None]
+        f1_values = [score.get('F1_REL') for score in relation_scores if score and score.get('F1_REL') is not None]
+        exact_values = [
+            score.get('relation_chain_exact_match')
+            for score in relation_scores
+            if score and score.get('relation_chain_exact_match') is not None
+        ]
+        prefix_values = [
+            score.get('relation_prefix_recall')
+            for score in relation_scores
+            if score and score.get('relation_prefix_recall') is not None
+        ]
+        if result is None:
+            result = {}
+        result = dict(result)
+        result['RED'] = min(red_values) if red_values else None
+        result['F1_REL'] = max(f1_values) if f1_values else None
+        result['relation_chain_exact_match'] = max(exact_values) if exact_values else None
+        result['relation_prefix_recall'] = max(prefix_values) if prefix_values else None
+
+    return result
+
+
+def _mean_available(values):
+    """Arithmetic mean over numeric, non-None values."""
+    available = [float(value) for value in values if isinstance(value, Number)]
+    return sum(available) / len(available) if available else None
+
+
+def _family_macro_scores(scores, family_ids, family_sizes=None):
+    """Macro-average metric records over question families."""
+    if not scores or not family_ids or len(scores) != len(family_ids):
+        return None
+
+    families = {}
+    for score, family_id in zip(scores, family_ids):
+        families.setdefault(str(family_id), []).append(score)
+
+    metric_names = sorted({
+        key
+        for family_scores in families.values()
+        for score in family_scores
+        for key in score
+    })
+    result = {
+        'count': len(scores),
+        'family_count': len(families),
+    }
+    for metric_name in metric_names:
+        family_values = [
+            _mean_available(score.get(metric_name) for score in family_scores)
+            for family_scores in families.values()
+        ]
+        result[metric_name] = _mean_available(family_values)
+        result[f'{metric_name}_support'] = sum(value is not None for value in family_values)
+
+    if family_sizes is not None and len(family_sizes) == len(family_ids):
+        observed_counts = {}
+        declared_sizes = {}
+        for family_id, family_size in zip(family_ids, family_sizes):
+            key = str(family_id)
+            observed_counts[key] = observed_counts.get(key, 0) + 1
+            try:
+                size = int(family_size)
+            except (TypeError, ValueError):
+                size = 0
+            if size > 0:
+                declared_sizes[key] = size
+        result['families_complete'] = bool(
+            declared_sizes
+            and all(
+                observed_counts.get(key, 0) == declared_sizes.get(key)
+                for key in observed_counts
+            )
+        )
+    return result
+
+
+def aggregate_family_answer_metrics(scores, family_ids, family_sizes=None):
+    """Family-macro counterpart of aggregate_answer_metrics."""
+    result = _family_macro_scores(scores, family_ids, family_sizes)
+    if result is None:
+        return None
+    hits1 = result.get('Hits1')
+    result['scored'] = len(scores)
+    result['correct'] = sum(float(score.get('Hits1') or 0.0) for score in scores)
+    result['accuracy'] = hits1 or 0.0
+    return result
+
+
+def prepare_demonstration_frame(train_df):
+    """Expose flattened Multi-Paths through the legacy Paths hook used by demo sampling."""
+    demo_df = train_df.copy()
+    if 'Multi-Paths' in demo_df.columns:
+        demo_df['Paths'] = demo_df['Multi-Paths'].apply(flatten_reference_paths)
+    return demo_df
 
 
 def summarize_original_ids(original_ids):
@@ -236,20 +469,15 @@ if __name__ == '__main__':
     elif args.max_questions is not None:
         qa_df = qa_df.head(args.max_questions).copy()
 
-    is_multi_answer = False
-    # check if answers are lists (multi-answer) or single values, and adjust accordingly
-    if not qa_df.empty and qa_df['Answer'].apply(
-        lambda value: isinstance(value, str) and value.strip().startswith('[')
-    ).all():
-        qa_df['Answer'] = extract_literals(qa_df['Answer'])
-        qa_df['Answer-Entity'] = extract_literals(qa_df['Answer-Entity'])
-        is_multi_answer = True
-
-    use_semantic_multi_path_eval = (
-        is_multi_answer
-        and 'Path-Key' in qa_df.columns
-        and 'Paths' not in qa_df.columns
+    is_multi_answer = bool(
+        not qa_df.empty
+        and qa_df['Answer-Entity'].apply(
+            lambda value: isinstance(value, str) and value.strip().startswith('[')
+        ).all()
     )
+    has_family_metadata = 'Question-Family-ID' in qa_df.columns
+    has_family_sizes = 'Question-Family-Size' in qa_df.columns
+    has_graph_answers = 'Graph-Answer-Entity' in qa_df.columns
 
     qa_df = qa_df.reset_index(drop=False).rename(columns={'index': 'dataframe_index'})
 
@@ -277,7 +505,7 @@ if __name__ == '__main__':
     )
 
     demonstration_records = sample_navigation_demonstrations(
-        train_df=train_df.reset_index(drop=True),
+        train_df=prepare_demonstration_frame(train_df.reset_index(drop=True)),
         outgoing_index=outgoing_index,
         relation_index=relation_index,
         n_shots=args.n_shots,
@@ -303,7 +531,14 @@ if __name__ == '__main__':
             statistics[f'{hop_size}'] = initialize_statistics(total=count)
 
     navigation_metric_scores = {
-        section: {'path': [], 'answer': []}
+        section: {
+            'path': [],
+            'answer': [],
+            'graph_path': [],
+            'graph_answer': [],
+            'family_ids': [],
+            'family_sizes': [],
+        }
         for section in statistics
     }
     episodes = []
@@ -338,39 +573,106 @@ if __name__ == '__main__':
 
             predicted_path = status_info.get('predicted_path', [])
             final_entity = status_info.get('final_entity')
-            raw_answer_entities = row['Answer-Entity']
-            valid_answer_entities = normalize_answer_entities(raw_answer_entities)
-            reference_paths = normalize_reference_paths(row['Paths']) if 'Paths' in qa_df.columns else []
-            relation_chain = normalize_relation_chain(row['Path-Key']) if 'Path-Key' in qa_df.columns else None
-            reference_path_source = 'dataset_paths' if reference_paths else None
 
-            # Match MINERVA's multi-answer semantics when exhaustive entity-level
-            # paths are not stored: lazily enumerate all graph realizations that
-            # follow the annotated relation chain exactly and end at a valid answer.
-            if use_semantic_multi_path_eval:
-                reference_paths = grapher.find_paths_by_relation_chain(
-                    start_entity=start_node,
-                    relation_chain=relation_chain,
-                    target_entities=valid_answer_entities,
-                )
+            valid_answer_entities = normalize_answer_entities(row['Answer-Entity'])
+            graph_answer_entities = (
+                normalize_answer_entities(row['Graph-Answer-Entity'])
+                if has_graph_answers else set()
+            )
+            reference_paths = get_reference_paths(row, graph_scope=False)
+            graph_reference_paths = get_reference_paths(row, graph_scope=True)
+            relation_chains = get_reference_relation_chains(row, reference_paths)
+            reference_path_source = 'dataset_paths' if reference_paths else None
+            graph_reference_path_source = 'graph_dataset_paths' if graph_reference_paths else None
+
+            # Match MINERVA's reconstruction semantics when exhaustive entity-level
+            # references are absent: enumerate all graph realizations for every
+            # released relation-chain annotation and retain answer-consistent paths.
+            if not reference_paths and is_multi_answer and relation_chains:
+                seen_paths = set()
+                reconstructed = []
+                for relation_chain in relation_chains:
+                    for path in grapher.find_paths_by_relation_chain(
+                        start_entity=start_node,
+                        relation_chain=relation_chain,
+                        target_entities=valid_answer_entities,
+                    ):
+                        key = tuple(tuple(edge) for edge in path)
+                        if key not in seen_paths:
+                            seen_paths.add(key)
+                            reconstructed.append(path)
+                reference_paths = reconstructed
                 if reference_paths:
                     reference_path_source = 'lazy_relation_chain'
 
-            path_score = best_path_fidelity_score(predicted_path, reference_paths, relation_chain)
-            answer_entity_score = score_single_final_entity(final_entity, valid_answer_entities) if final_entity is not None else {
+            if has_graph_answers and not graph_reference_paths and relation_chains:
+                seen_paths = set()
+                reconstructed = []
+                for relation_chain in relation_chains:
+                    for path in grapher.find_paths_by_relation_chain(
+                        start_entity=start_node,
+                        relation_chain=relation_chain,
+                        target_entities=graph_answer_entities,
+                    ):
+                        key = tuple(tuple(edge) for edge in path)
+                        if key not in seen_paths:
+                            seen_paths.add(key)
+                            reconstructed.append(path)
+                graph_reference_paths = reconstructed
+                if graph_reference_paths:
+                    graph_reference_path_source = 'lazy_relation_chain'
+
+            path_score = score_path_against_references(
+                predicted_path,
+                reference_paths,
+                relation_chains,
+            )
+            graph_path_score = (
+                score_path_against_references(
+                    predicted_path,
+                    graph_reference_paths,
+                    relation_chains,
+                )
+                if has_graph_answers else None
+            )
+
+            missing_answer_score = {
                 'Hits1': 0.0,
                 'MRR': None,
                 'final_entity_correct': 0.0,
             }
+            answer_entity_score = (
+                score_single_final_entity(final_entity, valid_answer_entities)
+                if final_entity is not None else dict(missing_answer_score)
+            )
+            graph_answer_entity_score = (
+                score_single_final_entity(final_entity, graph_answer_entities)
+                if has_graph_answers and final_entity is not None
+                else dict(missing_answer_score) if has_graph_answers else None
+            )
             correct = bool(answer_entity_score.get('Hits1'))
+            graph_correct = (
+                bool(graph_answer_entity_score.get('Hits1'))
+                if graph_answer_entity_score is not None else None
+            )
 
             metric_sections = ['overall']
             if args.hops == 'n' and f'{hop}' in statistics:
                 metric_sections.append(f'{hop}')
+            family_id = get_row_value(row, 'Question-Family-ID') if has_family_metadata else None
+            family_size = get_row_value(row, 'Question-Family-Size') if has_family_sizes else None
+
             for section in metric_sections:
                 if path_score is not None:
                     navigation_metric_scores[section]['path'].append(path_score)
                 navigation_metric_scores[section]['answer'].append(answer_entity_score)
+                if graph_path_score is not None:
+                    navigation_metric_scores[section]['graph_path'].append(graph_path_score)
+                if graph_answer_entity_score is not None:
+                    navigation_metric_scores[section]['graph_answer'].append(graph_answer_entity_score)
+                if has_family_metadata:
+                    navigation_metric_scores[section]['family_ids'].append(family_id)
+                    navigation_metric_scores[section]['family_sizes'].append(family_size)
 
             update_stats(
                 statistics['overall'],
@@ -409,9 +711,21 @@ if __name__ == '__main__':
                 'gold_answer_text': get_row_value(row, 'Answer'),
                 'gold_reference_path_source': reference_path_source,
                 'gold_reference_path_count': len(reference_paths),
+                'gold_relation_chain_count': len(relation_chains),
+                'question_family_id': family_id,
+                'question_family_size': family_size,
+                'graph_gold_answer_entities': sorted(graph_answer_entities) if has_graph_answers else None,
+                'graph_gold_answer_labels': (
+                    [entity_title.get(entity, entity) for entity in sorted(graph_answer_entities)]
+                    if has_graph_answers else None
+                ),
+                'graph_gold_answer_text': get_row_value(row, 'Graph-Answer') if has_graph_answers else None,
+                'graph_reference_path_source': graph_reference_path_source if has_graph_answers else None,
+                'graph_reference_path_count': len(graph_reference_paths) if has_graph_answers else None,
                 'predicted_terminal_entity': final_entity,
                 'predicted_terminal_label': entity_title.get(final_entity, final_entity) if final_entity is not None else None,
                 'answer_correct': correct,
+                'graph_answer_correct': graph_correct,
                 'termination_reason': status_info.get('termination_reason'),
                 'navigation_status': status_info.get('status'),
                 'status_message': status_info.get('message'),
@@ -456,6 +770,8 @@ if __name__ == '__main__':
                 'parse_validation_errors': status_info.get('parse_validation_errors', []),
                 'path_fidelity': path_score,
                 'final_entity_score': answer_entity_score,
+                'graph_path_fidelity': graph_path_score,
+                'graph_final_entity_score': graph_answer_entity_score,
                 'path_validation': path_validation,
                 'graph_directionality': status_info.get('graph_directionality', 'outgoing'),
                 'max_actions_exceeded': bool(status_info.get('max_actions_exceeded')),
@@ -474,6 +790,8 @@ if __name__ == '__main__':
             if args.debug and not correct:
                 pbar.write(f"\nQuestion: {question}")
                 pbar.write(f"Gold answer entities: {sorted(valid_answer_entities)}")
+                if has_graph_answers:
+                    pbar.write(f"Graph answer entities: {sorted(graph_answer_entities)}")
                 pbar.write(f"Predicted terminal entity: {final_entity}")
                 pbar.write(f"Navigation history: {navigation_history_txt}")
                 pbar.write(f"Termination: {status_info.get('termination_reason')} ({status_info.get('message', '')})")
@@ -490,8 +808,40 @@ if __name__ == '__main__':
     grapher.clear_relation_index()
 
     for section, metric_values in navigation_metric_scores.items():
+        # Backward-compatible primary metrics: released references, instance-micro.
         statistics[section]['path_fidelity'] = aggregate_single_prediction_metrics(metric_values['path'])
         statistics[section]['final_entity'] = aggregate_answer_metrics(metric_values['answer'])
+
+        if has_family_metadata:
+            statistics[section]['path_fidelity_family_macro'] = _family_macro_scores(
+                metric_values['path'],
+                metric_values['family_ids'],
+                metric_values['family_sizes'] if has_family_sizes else None,
+            )
+            statistics[section]['final_entity_family_macro'] = aggregate_family_answer_metrics(
+                metric_values['answer'],
+                metric_values['family_ids'],
+                metric_values['family_sizes'] if has_family_sizes else None,
+            )
+
+        if has_graph_answers:
+            statistics[section]['graph_path_fidelity'] = aggregate_single_prediction_metrics(
+                metric_values['graph_path']
+            )
+            statistics[section]['graph_final_entity'] = aggregate_answer_metrics(
+                metric_values['graph_answer']
+            )
+            if has_family_metadata:
+                statistics[section]['graph_path_fidelity_family_macro'] = _family_macro_scores(
+                    metric_values['graph_path'],
+                    metric_values['family_ids'],
+                    metric_values['family_sizes'] if has_family_sizes else None,
+                )
+                statistics[section]['graph_final_entity_family_macro'] = aggregate_family_answer_metrics(
+                    metric_values['graph_answer'],
+                    metric_values['family_ids'],
+                    metric_values['family_sizes'] if has_family_sizes else None,
+                )
 
     statistics['overall'] = avg_dict(statistics['overall'])
     acc = statistics['overall']['accuracy']
@@ -501,7 +851,7 @@ if __name__ == '__main__':
     overall_path = statistics['overall']['path_fidelity']
     overall_entity = statistics['overall']['final_entity']
     print(
-        'Navigation Metrics: '
+        'Navigation Metrics (Answer / instance-micro): '
         f"PED={overall_path.get('PED')}, "
         f"RED={overall_path.get('RED')}, "
         f"F1_SG={overall_path.get('F1_SG')}, "
@@ -512,6 +862,42 @@ if __name__ == '__main__':
         f"relation_exact={overall_path.get('relation_chain_exact_match')}, "
         f"triplet_f1={overall_path.get('triplet_f1')}"
     )
+    if has_family_metadata:
+        family_path = statistics['overall'].get('path_fidelity_family_macro') or {}
+        family_entity = statistics['overall'].get('final_entity_family_macro') or {}
+        print(
+            'Navigation Metrics (Answer / family-macro): '
+            f"PED={family_path.get('PED')}, "
+            f"RED={family_path.get('RED')}, "
+            f"F1_SG={family_path.get('F1_SG')}, "
+            f"F1_REL={family_path.get('F1_REL')}, "
+            f"Hits1={family_entity.get('Hits1')}, "
+            f"MRR={family_entity.get('MRR')}"
+        )
+    if has_graph_answers:
+        graph_path = statistics['overall'].get('graph_path_fidelity') or {}
+        graph_entity = statistics['overall'].get('graph_final_entity') or {}
+        print(
+            'Navigation Metrics (Graph-Answer / instance-micro): '
+            f"PED={graph_path.get('PED')}, "
+            f"RED={graph_path.get('RED')}, "
+            f"F1_SG={graph_path.get('F1_SG')}, "
+            f"F1_REL={graph_path.get('F1_REL')}, "
+            f"Hits1={graph_entity.get('Hits1')}, "
+            f"MRR={graph_entity.get('MRR')}"
+        )
+        if has_family_metadata:
+            graph_family_path = statistics['overall'].get('graph_path_fidelity_family_macro') or {}
+            graph_family_entity = statistics['overall'].get('graph_final_entity_family_macro') or {}
+            print(
+                'Navigation Metrics (Graph-Answer / family-macro): '
+                f"PED={graph_family_path.get('PED')}, "
+                f"RED={graph_family_path.get('RED')}, "
+                f"F1_SG={graph_family_path.get('F1_SG')}, "
+                f"F1_REL={graph_family_path.get('F1_REL')}, "
+                f"Hits1={graph_family_entity.get('Hits1')}, "
+                f"MRR={graph_family_entity.get('MRR')}"
+            )
 
     if args.hops == 'n':
         for hop_size in sorted(key for key in statistics if key != 'overall'):
@@ -570,6 +956,10 @@ if __name__ == '__main__':
             'graph_directionality': 'outgoing',
             'title_mapping': title_mapping_status,
             'max_questions': args.max_questions,
+            'has_family_metadata': has_family_metadata,
+            'has_family_sizes': has_family_sizes,
+            'has_graph_answers': has_graph_answers,
+            'primary_reference_scope': 'Answer',
         },
         'statistics': statistics,
         'episodes': episodes,
