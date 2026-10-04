@@ -337,6 +337,14 @@ def parse_args():
                         help='Name of the dataset to process.')
     parser.add_argument('--hops', type=str, default='n',
                         help='QA dataset hop split to evaluate.')
+    parser.add_argument('--triplets-file', type=str, default='triplets.txt',
+                        help='Optional triplet file override for the dataset.')
+    parser.add_argument('--qa-file-prefix', type=str, default=None,
+                        help='Optional QA file prefix for the dataset.')
+    parser.add_argument('--entity-id-col', type=str, default='QID',
+                        help='Column name for entity ID in node_data.csv.')
+    parser.add_argument('--relation-id-col', type=str, default='Property',
+                        help='Column name for relation ID in relation_data.csv.')
     parser.add_argument('--max-questions', type=int, default=None,
                         help='Process only the first N test questions (must be positive).')
     parser.add_argument('--question-idxs', type=int, nargs='+', default=None,
@@ -443,15 +451,21 @@ if __name__ == '__main__':
         )
     prompting_label = number_to_shot_label(args.n_shots)
 
+    if args.qa_file_prefix is not None:
+        qa_file = os.path.join(args.data_dir, args.dataset, f'{args.qa_file_prefix}_qa_{args.hops}hop.csv')
+    else:
+        qa_file = os.path.join(args.data_dir, args.dataset, f'qa_{args.hops}hop.csv')
+
     data_dir = os.path.join(args.data_dir, args.dataset)
-    qa_file = os.path.join(data_dir, f'qa_{args.hops}hop.csv')
-    triplet_file = os.path.join(data_dir, 'triplets.txt')
+    triplet_file = os.path.join(data_dir, args.triplets_file)
     entity_file = os.path.join(data_dir, 'node_data.csv')
     relation_file = os.path.join(data_dir, 'relation_data.csv')
 
     entity_title, relation_title, title_mapping_status = load_title_maps(
         entity_file,
         relation_file,
+        args.entity_id_col,
+        args.relation_id_col,
     )
 
     all_triplets_df = load_triplets(triplet_file)

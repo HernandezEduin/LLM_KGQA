@@ -39,6 +39,8 @@ def translate_path(
 def load_title_maps(
     entity_file: str,
     relation_file: str,
+    entity_id_col: str = 'QID',
+    relation_id_col: str = 'Property',
 ) -> Tuple[EntityTitleMap, RelationTitleMap, StatusInfo]:
     # TODO: Allow for different column names for QID/Property and Title, e.g., "EID"/"RID" and "Title" in MetaQA.
     """Load optional entity/relation label maps, falling back to identity labels.
@@ -71,12 +73,12 @@ def load_title_maps(
     entity_title: EntityTitleMap = {}
     if os.path.exists(entity_file):
         entity_df = load_pandas(entity_file)
-        required_columns = {'QID', 'Title'}
+        required_columns = {entity_id_col, 'Title'}
         if not required_columns.issubset(entity_df.columns):
             raise ValueError(
                 f"Entity mapping file {entity_file} must contain columns {sorted(required_columns)}."
             )
-        entity_df.set_index('QID', inplace=True)
+        entity_df.set_index(entity_id_col, inplace=True)
         entity_title = entity_df['Title'].to_dict()
         mapping_status['entity_title_source'] = 'file'
         mapping_status['entity_title_count'] = len(entity_title)
@@ -84,12 +86,12 @@ def load_title_maps(
     relation_title: RelationTitleMap = {}
     if os.path.exists(relation_file):
         relation_df = load_pandas(relation_file)
-        required_columns = {'Property', 'Title'}
+        required_columns = {relation_id_col, 'Title'}
         if not required_columns.issubset(relation_df.columns):
             raise ValueError(
                 f"Relation mapping file {relation_file} must contain columns {sorted(required_columns)}."
             )
-        relation_df.set_index('Property', inplace=True)
+        relation_df.set_index(relation_id_col, inplace=True)
         relation_title = relation_df['Title'].to_dict()
         mapping_status['relation_title_source'] = 'file'
         mapping_status['relation_title_count'] = len(relation_title)
